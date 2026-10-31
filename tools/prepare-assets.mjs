@@ -79,6 +79,8 @@ const runtime = `var $imports={
   $escape:function(c){var s=(c===undefined||c===null)?'':String(c);return s.replace(/["&'<>]/g,function(ch){return {'"':'&#34;','&':'&amp;',"'":'&#39;','<':'&lt;','>':'&gt;'}[ch];});},
   $each:function(d,cb){if(Array.isArray(d)){for(var i=0;i<d.length;i++)cb(d[i],i);}else{for(var k in d)cb(d[k],k);}}
 };`;
+fs.copyFileSync(path.join(import.meta.dirname, 'plugin-src/render.html'), path.join(OUT, 'render.html'));
+
 fs.writeFileSync(
   path.join(OUT, 'b19-tpl.js'),
   `window.__B19_TPL=(function(){${runtime}return (${fn.toString()});})();\n`

@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>render</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; }
+  #boot { color: #666; font: 14px sans-serif; padding: 8px; }
+</style>
+</head>
+<body>
+<div id="boot">rendering…</div>
+<script src="b19-tpl.js"></script>
+<script>
+  window.__render = function (json) {
+    try {
+      var data = JSON.parse(json);
+      var html = window.__B19_TPL(data);
+      document.open();
+      document.write(html);
+      document.close();
+    } catch (e) {
+      if (window.CaptureBridge) window.CaptureBridge.fail(String((e && e.message) || e));
+      return;
+    }
+    finish();
+  };
+
+  function finish() {
+    var imgs = Array.prototype.slice.call(document.images);
+    var waits = imgs.map(function (im) {
+      return im.complete ? Promise.resolve() : new Promise(function (r) { im.onload = im.onerror = r; });
+    });
+    var fonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+    var all = Promise.all([fonts].concat(waits));
+    var cap = new Promise(function (r) { setTimeout(r, 6000); });
+    Promise.race([all, cap]).then(function () {
+      setTimeout(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            var w = Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, 1200);
+            var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+            if (window.CaptureBridge) window.CaptureBridge.ready(w, h);
+          });
+        });
+      }, 150);
+    });
+  }
+</script>
+</body>
+</html>
