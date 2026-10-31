@@ -306,7 +306,8 @@
     let minuprks = Math.floor(userrks * 100) / 100 + 0.005 - userrks;
     if (minuprks < 0) minuprks += 0.01;
     const ill = (id) => `https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/illLow/${encodeURIComponent(id)}.png`;
-    const rows = list.slice(0, computed.n || 19).map((x, i) => {
+    const n = Number(state.n) || 30;
+    const rows = list.slice(0, n).map((x, i) => {
       const sug = suggestFor(x, i, rest, minuprks);
       return {
         id: x.id, song: x.song, rank: x.rank, difficulty: x.difficulty,
@@ -333,7 +334,7 @@
         ChallengeModeRank: computed.challengeMode % 100,
         selfIntro: state.save?.user?.selfIntro || '',
       },
-      nnum: computed.n || 19,
+      nnum: n,
       stats: buildStats(computed),
       spInfo: [],
       _res_path: 'https://appassets.local/plugin/',
