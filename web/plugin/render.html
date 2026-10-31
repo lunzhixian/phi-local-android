@@ -23,6 +23,11 @@
       if (window.CaptureBridge) window.CaptureBridge.fail(String((e && e.message) || e));
       return;
     }
+    // 任何图片加载失败都隐藏，避免破图
+    document.addEventListener('error', function (e) {
+      var t = e.target;
+      if (t && t.tagName === 'IMG') { t.style.visibility = 'hidden'; }
+    }, true);
     finish();
   };
 

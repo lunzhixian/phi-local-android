@@ -45,6 +45,11 @@ for (const f of FONTS) copy(path.join(RES, 'html/common/font', f), path.join(OUT
 
 // 图标与头像
 copyDir(path.join(RES, 'html/otherimg'), path.join(OUT, 'html/otherimg'));
+// Challenge Mode 徽章：上游只到 5，缺的用同一张补齐，避免破图
+for (let i = 6; i <= 13; i++) {
+  const dst = path.join(OUT, 'html/otherimg', `${i}.png`);
+  if (!fs.existsSync(dst)) copy(path.join(RES, 'html/otherimg/5.png'), dst);
+}
 copyDir(path.join(RES, 'html/avatar'), path.join(OUT, 'html/avatar'), (n) => n.endsWith('.png'));
 fs.writeFileSync(
   path.join(OUT, 'html/avatar/index.json'),
@@ -80,6 +85,10 @@ const runtime = `var $imports={
   $each:function(d,cb){if(Array.isArray(d)){for(var i=0;i<d.length;i++)cb(d[i],i);}else{for(var k in d)cb(d[k],k);}}
 };`;
 fs.copyFileSync(path.join(import.meta.dirname, 'plugin-src/render.html'), path.join(OUT, 'render.html'));
+
+// 曲绘本（build-ill.mjs 产出，320px JPEG）
+const illSrc = path.join(import.meta.dirname, '../ill-src');
+if (fs.existsSync(illSrc)) copyDir(illSrc, path.join(OUT, 'ill'), (n) => n.endsWith('.jpg'));
 
 fs.writeFileSync(
   path.join(OUT, 'b19-tpl.js'),

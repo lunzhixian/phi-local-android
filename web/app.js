@@ -305,7 +305,8 @@
     const userrks = Number(computed.rks) || 0;
     let minuprks = Math.floor(userrks * 100) / 100 + 0.005 - userrks;
     if (minuprks < 0) minuprks += 0.01;
-    const ill = (id) => `https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/illLow/${encodeURIComponent(id)}.png`;
+    // 曲绘本地打包（由 tools/prepare-assets.mjs 生成），彻底离线
+    const ill = (id) => `https://appassets.local/plugin/ill/${encodeURIComponent(id)}.jpg`;
     const n = Number(state.n) || 30;
     const rows = list.slice(0, n).map((x, i) => {
       const sug = suggestFor(x, i, rest, minuprks);
