@@ -29,6 +29,7 @@ import java.util.zip.GZIPInputStream;
 public class MainActivity extends Activity {
 
     private WebView webView;
+    private boolean loadedFallback = false;
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -59,6 +60,14 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return true;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
+                if (request.isForMainFrame() && !loadedFallback) {
+                    loadedFallback = true;
+                    view.loadUrl("file:///android_asset/www/index.html");
+                }
             }
 
             @Override
@@ -128,7 +137,7 @@ public class MainActivity extends Activity {
     }
 
     /** JS 桥：所有网络请求走原生，避免 WebView 的 CORS 限制 */
-    private class Bridge {
+    public class Bridge {
 
         @JavascriptInterface
         public void httpGet(String url, String headersJson, String callbackId) {
