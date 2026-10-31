@@ -1,0 +1,208 @@
+package com.philocal.app;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.graphics.Color;
+import android.os.Build;
+import android.os.Bundle;
+import android.util.Base64;
+import android.view.View;
+import android.view.WindowInsets;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.Toast;
+
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Iterator;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.zip.GZIPInputStream;
+
+public class MainActivity extends Activity {
+
+    private WebView webView;
+    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(Color.parseColor("#07090f"));
+        getWindow().setNavigationBarColor(Color.parseColor("#07090f"));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(true);
+        }
+
+        webView = new WebView(this);
+        webView.setBackgroundColor(Color.parseColor("#07090f"));
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        WebSettings s = webView.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(true);
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setTextZoom(100);
+        s.setSupportZoom(false);
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return true;
+            }
+
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String host = request.getUrl().getHost();
+                if (!"appassets.local".equals(host)) return null;
+                String path = request.getUrl().getPath();
+                if (path == null || path.equals("/") || path.isEmpty()) path = "/index.html";
+                String assetPath = "www" + path;
+                try {
+                    java.io.InputStream in = getAssets().open(assetPath);
+                    String mime = guessMime(assetPath);
+                    return new android.webkit.WebResourceResponse(mime, "UTF-8", in);
+                } catch (Exception e) {
+                    return new android.webkit.WebResourceResponse("text/plain", "UTF-8",
+                            new java.io.ByteArrayInputStream("Not found".getBytes()));
+                }
+            }
+        });
+
+        webView.addJavascriptInterface(new Bridge(), "NativeBridge");
+        setContentView(webView);
+        webView.loadUrl("https://appassets.local/index.html");
+    }
+
+    private String guessMime(String path) {
+        if (path.endsWith(".html")) return "text/html";
+        if (path.endsWith(".js")) return "application/javascript";
+        if (path.endsWith(".css")) return "text/css";
+        if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+        if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".woff2")) return "font/woff2";
+        return "application/octet-stream";
+    }
+
+    @Override
+    public void onBackPressed() {
+        webView.evaluateJavascript(
+                "(function(){var s=document.getElementById('sheet');" +
+                        "if(s&&s.classList.contains('show')){document.getElementById('sheetMask').click();return 'sheet';}" +
+                        "return 'exit';})()",
+                value -> {
+                    if (value == null || !value.contains("sheet")) {
+                        finish();
+                    }
+                });
+    }
+
+    @Override
+    protected void onDestroy() {
+        pool.shutdownNow();
+        if (webView != null) {
+            webView.destroy();
+        }
+        super.onDestroy();
+    }
+
+    private void resolve(String callbackId, String json) {
+        final String js = "window.__nativeResolve(" + JSONObject.quote(callbackId) + "," + JSONObject.quote(json) + ");";
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(js, null);
+            }
+        });
+    }
+
+    /** JS 桥：所有网络请求走原生，避免 WebView 的 CORS 限制 */
+    private class Bridge {
+
+        @JavascriptInterface
+        public void httpGet(String url, String headersJson, String callbackId) {
+            pool.execute(() -> {
+                String result = fetch(url, headersJson, false);
+                resolve(callbackId, result);
+            });
+        }
+
+        @JavascriptInterface
+        public void httpGetBase64(String url, String headersJson, String callbackId) {
+            pool.execute(() -> {
+                String result = fetch(url, headersJson, true);
+                resolve(callbackId, result);
+            });
+        }
+
+        @JavascriptInterface
+        public void toast(String text) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public String appVersion() {
+            return "1.0.0";
+        }
+    }
+
+    private String fetch(String url, String headersJson, boolean base64) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestProperty("Accept-Encoding", "gzip");
+            if (headersJson != null && !headersJson.isEmpty()) {
+                JSONObject h = new JSONObject(headersJson);
+                Iterator<String> it = h.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    conn.setRequestProperty(k, h.optString(k));
+                }
+            }
+            int status = conn.getResponseCode();
+            InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (in == null) in = conn.getErrorStream();
+            if ("gzip".equalsIgnoreCase(conn.getContentEncoding()) && in != null) {
+                in = new GZIPInputStream(in);
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while (in != null && (n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            byte[] bytes = bos.toByteArray();
+
+            JSONObject out = new JSONObject();
+            out.put("ok", status >= 200 && status < 300);
+            out.put("status", status);
+            out.put("body", base64 ? Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    : new String(bytes, "UTF-8"));
+            return out.toString();
+        } catch (Exception e) {
+            try {
+                JSONObject out = new JSONObject();
+                out.put("ok", false);
+                out.put("status", 0);
+                out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+                return out.toString();
+            } catch (Exception ignored) {
+                return "{\"ok\":false,\"status\":0,\"error\":\"unknown\"}";
+            }
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+}

@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.philocal.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.philocal.phi"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            applicationIdSuffix ""
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    androidResources {
+        noCompress 'js', 'json'
+    }
+}
+
+// 构建前把 web/ 下的前端同步进 assets/www
+def webDir = rootProject.file('web')
+def assetsWeb = file('src/main/assets/www')
+
+tasks.register('syncWebAssets', Copy) {
+    from webDir
+    into assetsWeb
+    include 'index.html', 'style.css', 'app.js', 'save.js', 'data.js', 'vendor-*.js'
+}
+
+tasks.named('preBuild').configure {
+    dependsOn 'syncWebAssets'
+}

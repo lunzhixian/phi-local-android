@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#07090f" />
+<title>Phi 本地版</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">Φ</div>
+      <div>
+        <h1>Phi 本地版</h1>
+        <p id="brandSub">Phigros 离线成绩助手</p>
+      </div>
+    </div>
+    <div class="chip-status" id="statusChip">未绑定</div>
+  </header>
+
+  <!-- 未绑定：引导 -->
+  <section id="view-welcome">
+    <div class="card">
+      <h2>连接你的 Phigros 账号</h2>
+      <p class="muted small" style="line-height:1.7;margin-top:0">
+        本应用完全在本机运行，不需要 QQ 机器人。填写 TapTap 云存档的 Session Token，
+        即可读取你的 B19 成绩、RKS 与曲库资料。
+      </p>
+      <div class="field" style="margin-top:16px">
+        <label>Session Token（25 位）</label>
+        <input class="input" id="tokenInput" placeholder="例如 AbCdEfGhIjKlMnOpQrStUvWxY" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label>服务器</label>
+        <select class="input" id="serverSelect">
+          <option value="cn">国服（TapTap 中国区）</option>
+          <option value="global">国际服</option>
+        </select>
+      </div>
+      <button class="btn" id="bindBtn">连接并同步</button>
+      <div class="notice">
+        Token 只保存在本机。获取方式：在 Phigros 登录界面右上角的「云存档」中登录 TapTap 后，
+        使用抓包工具或在已登录的设备上导出 Session Token。请勿把 Token 分享给他人。
+      </div>
+    </div>
+  </section>
+
+  <!-- 概览 -->
+  <section id="view-home" class="hidden">
+    <div class="card">
+      <div class="profile">
+        <div class="avatar" id="avatar">Φ</div>
+        <div class="profile-meta">
+          <div class="name" id="playerName">--</div>
+          <div class="sub" id="playerSub">--</div>
+        </div>
+      </div>
+      <div class="rks-line">
+        <div class="v" id="rksValue">0.0000</div>
+        <div class="k">Ranking Score</div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><b id="statPlayed">0</b><span>游玩曲目</span></div>
+        <div class="stat"><b id="statPhi">0</b><span>φ 满分</span></div>
+        <div class="stat"><b id="statFc">0</b><span>FC 数</span></div>
+      </div>
+      <div class="stat-grid" style="margin-top:10px">
+        <div class="stat"><b id="statData">0 B</b><span>Data</span></div>
+        <div class="stat"><b id="statAvg">0.00</b><span>B19 均 RKS</span></div>
+        <div class="stat"><b id="statDiff">0</b><span>最高定数</span></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn ghost" id="syncBtn" style="flex:1">重新同步</button>
+        <button class="btn" id="goB19Btn" style="flex:1">查看 B19</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>φ / 高光成绩</h2>
+      <div id="phiList" class="list-card"></div>
+    </div>
+  </section>
+
+  <!-- B19 -->
+  <section id="view-b19" class="hidden">
+    <div class="b19-head">
+      <h2>Best 19</h2>
+      <div class="rks" id="b19Rks">RKS --</div>
+    </div>
+    <div id="b19List"></div>
+  </section>
+
+  <!-- 曲库 -->
+  <section id="view-library" class="hidden">
+    <div class="toolbar">
+      <input class="input" id="searchInput" placeholder="搜索曲名 / 曲师 / 谱师" />
+    </div>
+    <div class="filter-chips" id="diffChips">
+      <button class="fchip active" data-diff="">全部</button>
+      <button class="fchip" data-diff="EZ">EZ</button>
+      <button class="fchip" data-diff="HD">HD</button>
+      <button class="fchip" data-diff="IN">IN</button>
+      <button class="fchip" data-diff="AT">AT</button>
+    </div>
+    <div class="filter-chips" id="sortChips">
+      <button class="fchip active" data-sort="diff">按定数</button>
+      <button class="fchip" data-sort="name">按曲名</button>
+      <button class="fchip" data-sort="bpm">按 BPM</button>
+      <button class="fchip" data-sort="chapter">按章节</button>
+    </div>
+    <div id="songList"></div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="view-settings" class="hidden">
+    <div class="card">
+      <h2>账号</h2>
+      <div class="field">
+        <label>Session Token</label>
+        <input class="input" id="tokenInput2" placeholder="25 位 Token" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label>服务器</label>
+        <select class="input" id="serverSelect2">
+          <option value="cn">国服（TapTap 中国区）</option>
+          <option value="global">国际服</option>
+        </select>
+      </div>
+      <button class="btn" id="saveTokenBtn">保存并同步</button>
+    </div>
+
+    <div class="card">
+      <h2>数据</h2>
+      <p class="muted small" style="margin-top:0;line-height:1.7">
+        曲库数据由 phi-plugin 的 resources/info 生成，共 <span id="songCount">0</span> 首曲目；
+        曲绘在线获取，加载失败时使用渐变占位。
+      </p>
+      <button class="btn ghost" id="clearBtn" style="margin-top:8px">清除本机账号数据</button>
+    </div>
+
+    <div class="card">
+      <h2>关于</h2>
+      <p class="muted small" style="line-height:1.8;margin:0">
+        本项目是 <b>Catrong/phi-plugin</b> 的离线安卓移植版本，只保留本机使用的查询与成绩展示功能，
+        移除了 QQ 机器人指令、群聊与账号绑定等联网社交部分。<br />
+        存档解析逻辑（ByteReader / AES / GameRecord）移植自该项目的 lib 目录。<br />
+        版本 1.0.0
+      </p>
+    </div>
+  </section>
+</div>
+
+<nav class="tabs">
+  <div class="tabs-inner">
+    <button class="tab active" data-view="home"><i>◎</i>概览</button>
+    <button class="tab" data-view="b19"><i>▤</i>B19</button>
+    <button class="tab" data-view="library"><i>♪</i>曲库</button>
+    <button class="tab" data-view="settings"><i>⚙</i>设置</button>
+  </div>
+</nav>
+
+<div class="toast" id="toast"></div>
+<div class="sheet-mask" id="sheetMask"></div>
+<div class="sheet" id="sheet">
+  <div class="bar"></div>
+  <div id="sheetBody"></div>
+</div>
+
+<script src="vendor-crypto.js"></script>
+<script src="vendor-jszip.js"></script>
+<script src="data.js"></script>
+<script src="save.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

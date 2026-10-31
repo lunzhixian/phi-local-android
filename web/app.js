@@ -1,0 +1,412 @@
+/* Phi 本地版 — 界面与成绩计算 */
+(function () {
+  'use strict';
+
+  const DATA = window.PHI_DATA || { songs: [] };
+  const SONG_BY_ID = new Map();
+  for (const s of DATA.songs) SONG_BY_ID.set(s.id, s);
+  const LEVEL_NAMES = ['EZ', 'HD', 'IN', 'AT'];
+
+  const LS_TOKEN = 'phi.token';
+  const LS_SERVER = 'phi.server';
+  const LS_LAST = 'phi.lastSync';
+
+  const state = {
+    token: localStorage.getItem(LS_TOKEN) || '',
+    server: localStorage.getItem(LS_SERVER) || 'cn',
+    save: null,
+    computed: null,
+    view: 'home',
+    diffFilter: '',
+    sortMode: 'diff',
+    query: '',
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (n, d = 4) => Number(n || 0).toFixed(d);
+  const normId = (id) => String(id).replace(/\.0$/, '');
+
+  /* ---------------- 成绩计算 ---------------- */
+
+  function difficultyOf(id, level) {
+    const song = SONG_BY_ID.get(normId(id));
+    return song?.diffs?.[LEVEL_NAMES[level]] || 0;
+  }
+
+  function rksOf(acc, difficulty) {
+    if (acc === 100) return Number(difficulty);
+    if (acc < 70) return 0;
+    return difficulty * (((acc - 55) / 45) ** 2);
+  }
+
+  function ratingOf(score, fc) {
+    if (score >= 1000000) return 'phi';
+    if (fc) return 'FC';
+    if (!score) return 'NEW';
+    if (score < 700000) return 'F';
+    if (score < 820000) return 'C';
+    if (score < 880000) return 'B';
+    if (score < 920000) return 'A';
+    if (score < 960000) return 'S';
+    return 'V';
+  }
+
+  function compute(save) {
+    const list = [];
+    const rec = save.records || {};
+    for (const id of Object.keys(rec)) {
+      const arr = rec[id];
+      for (let level = 0; level < 4; level++) {
+        const r = arr[level];
+        if (!r || !r.score) continue;
+        const difficulty = difficultyOf(id, level);
+        const song = SONG_BY_ID.get(normId(id));
+        list.push({
+          id: normId(id),
+          song: song?.song || id,
+          rank: LEVEL_NAMES[level],
+          level,
+          score: r.score,
+          acc: r.acc,
+          fc: !!r.fc,
+          difficulty,
+          rks: rksOf(r.acc, difficulty),
+          rating: ratingOf(r.score, r.fc),
+        });
+      }
+    }
+    list.sort((a, b) => b.rks - a.rks);
+    const phi = list.filter((x) => x.acc >= 100).slice(0, 3);
+    const best19 = list.slice(0, 19);
+    const summary = save.summary || {};
+    const played = new Set(list.map((x) => x.id)).size;
+    const fcCount = list.filter((x) => x.fc).length;
+    const phiCount = list.filter((x) => x.acc >= 100).length;
+    const money = save.progress?.money || [0, 0, 0, 0, 0];
+    const dataSize = money[4] ? `${money[4]}PiB` : money[3] ? `${money[3]}TiB` : money[2] ? `${money[2]}GiB`
+      : money[1] ? `${money[1]}MiB` : `${money[0] || 0}KiB`;
+    const avg = best19.length ? best19.reduce((s, x) => s + x.rks, 0) / best19.length : 0;
+    const maxDiff = list.reduce((m, x) => Math.max(m, x.difficulty), 0);
+    return {
+      list, phi, best19, avg, played, fcCount, phiCount, dataSize, maxDiff,
+      rks: summary.rankingScore || 0,
+      challengeMode: save.progress?.challengeModeRank || summary.challengeModeRank || 0,
+      nickname: save.nickname || 'Phigros Player',
+      updatedAt: save.updatedAt || '',
+    };
+  }
+
+  /* ---------------- 网络与同步 ---------------- */
+
+  async function sync() {
+    const token = state.token.trim();
+    if (!/^[A-Za-z0-9]{25}$/.test(token)) {
+      toast('Session Token 应为 25 位字母数字');
+      return;
+    }
+    setStatus('同步中…', true);
+    try {
+      const { player, saveInfo } = await window.PhiSave.fetchAccount(token, state.server);
+      const save = await window.PhiSave.loadSave(saveInfo);
+      save.nickname = player.nickname || player.username || 'Phigros Player';
+      save.updatedAt = new Date(saveInfo.modifiedAt?.iso || saveInfo.updatedAt || Date.now()).toLocaleString('zh-CN');
+      state.save = save;
+      state.computed = compute(save);
+      localStorage.setItem(LS_LAST, new Date().toISOString());
+      setStatus('已同步');
+      renderAll();
+      toast('存档同步成功');
+    } catch (err) {
+      console.error(err);
+      setStatus('同步失败');
+      toast(String(err.message || err));
+    }
+  }
+
+  function setStatus(text, busy) {
+    const el = $('statusChip');
+    if (!el) return;
+    el.innerHTML = busy ? `<span class="loading"></span> ${esc(text)}` : esc(text);
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  function renderAll() {
+    const has = !!state.computed;
+    $('view-welcome').classList.toggle('hidden', has);
+    $('view-home').classList.toggle('hidden', !has || state.view !== 'home');
+    $('view-b19').classList.toggle('hidden', !has || state.view !== 'b19');
+    $('view-library').classList.toggle('hidden', state.view !== 'library');
+    $('view-settings').classList.toggle('hidden', state.view !== 'settings');
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === state.view));
+    if (has) {
+      renderHome();
+      renderB19();
+      $('brandSub').textContent = `${state.computed.nickname} · ${state.server === 'cn' ? '国服' : '国际服'}`;
+    }
+    $('tokenInput2').value = state.token;
+    $('serverSelect2').value = state.server;
+    $('serverSelect').value = state.server;
+    $('songCount').textContent = DATA.songs.length;
+    renderLibrary();
+  }
+
+  function renderHome() {
+    const c = state.computed;
+    $('avatar').textContent = (c.nickname || 'Φ').slice(0, 1).toUpperCase();
+    $('playerName').textContent = c.nickname;
+    $('playerSub').textContent = `更新于 ${c.updatedAt || '—'} · Challenge ${Math.floor(c.challengeMode / 100)}-${c.challengeMode % 100}`;
+    $('rksValue').textContent = fmt(c.rks);
+    $('statPlayed').textContent = c.played;
+    $('statPhi').textContent = c.phiCount;
+    $('statFc').textContent = c.fcCount;
+    $('statData').textContent = c.dataSize;
+    $('statAvg').textContent = fmt(c.avg, 2);
+    $('statDiff').textContent = c.maxDiff.toFixed(1);
+
+    const box = $('phiList');
+    if (!c.phi.length) {
+      box.innerHTML = '<div class="empty">还没有 φ 满分的成绩，先去收一首吧</div>';
+      return;
+    }
+    box.innerHTML = c.phi.map((p, i) => `
+      <div class="song-row" data-song="${esc(p.id)}">
+        <div class="idx" style="width:22px;font-weight:800;color:var(--gold)">${i + 1}</div>
+        <div class="txt">
+          <div class="n">${esc(p.song)}</div>
+          <div class="s"><span class="diff ${p.rank}">${p.rank}</span> ${p.difficulty.toFixed(1)}</div>
+        </div>
+        <div class="diffs"><span class="rating phi">φ</span></div>
+      </div>`).join('');
+    box.querySelectorAll('[data-song]').forEach((el) => el.addEventListener('click', () => openSong(el.dataset.song, c)));
+  }
+
+  function renderB19() {
+    const c = state.computed;
+    $('b19Rks').textContent = `RKS ${fmt(c.rks)} · B19 均 ${fmt(c.avg, 3)}`;
+    const box = $('b19List');
+    if (!c.best19.length) {
+      box.innerHTML = '<div class="empty"><div class="big">▤</div>暂无成绩数据</div>';
+      return;
+    }
+    box.innerHTML = c.best19.map((x, i) => `
+      <div class="row" data-song="${esc(x.id)}">
+        <div class="idx ${i < 3 ? 'top' : ''}">${i + 1}</div>
+        <div class="main">
+          <div class="song">${esc(x.song)}</div>
+          <div class="meta">
+            <span class="diff ${x.rank}">${x.rank}</span>
+            <span>定数 ${x.difficulty.toFixed(1)}</span>
+            <span class="rating ${x.rating}">${x.rating}</span>
+          </div>
+        </div>
+        <div class="side">
+          <div class="score">${x.score}</div>
+          <div class="rksv">${fmt(x.rks)} · ${x.acc.toFixed(2)}%</div>
+        </div>
+      </div>`).join('');
+    box.querySelectorAll('[data-song]').forEach((el) => el.addEventListener('click', () => openSong(el.dataset.song, c)));
+  }
+
+  function renderLibrary() {
+    const box = $('songList');
+    if (!box) return;
+    const q = state.query.trim().toLowerCase();
+    let songs = DATA.songs.filter((s) => {
+      if (state.diffFilter && !s.diffs[state.diffFilter]) return false;
+      if (!q) return true;
+      return (
+        s.song.toLowerCase().includes(q) ||
+        s.composer.toLowerCase().includes(q) ||
+        Object.values(s.charters || {}).some((c) => String(c).toLowerCase().includes(q))
+      );
+    });
+    const maxDiff = (s) => Math.max(0, ...Object.values(s.diffs || {}).map(Number));
+    if (state.sortMode === 'diff') songs = songs.sort((a, b) => maxDiff(b) - maxDiff(a));
+    else if (state.sortMode === 'name') songs = songs.sort((a, b) => a.song.localeCompare(b.song, 'zh-Hans-CN'));
+    else if (state.sortMode === 'bpm') songs = songs.sort((a, b) => (parseFloat(b.bpm) || 0) - (parseFloat(a.bpm) || 0));
+    else if (state.sortMode === 'chapter') songs = songs.sort((a, b) => a.chapter.localeCompare(b.chapter, 'zh-Hans-CN'));
+
+    const shown = songs.slice(0, 400);
+    box.innerHTML = shown.length
+      ? shown.map((s) => {
+        const boxes = LEVEL_NAMES.filter((lv) => s.diffs[lv]).map((lv) => `
+          <span class="dbox ok ${lv}"><span style="font-size:9px;color:var(--muted)">${lv}</span><b>${Number(s.diffs[lv]).toFixed(1)}</b></span>`).join('');
+        return `<div class="song-row" data-song="${esc(s.id)}">
+          <div class="txt"><div class="n">${esc(s.song)}</div><div class="s">${esc(s.composer)}${s.bpm ? ` · ${esc(s.bpm)} BPM` : ''}</div></div>
+          <div class="diffs">${boxes || '<span class="dbox">SP</span>'}</div>
+        </div>`;
+      }).join('')
+      : '<div class="empty">没有找到匹配的曲目</div>';
+    box.querySelectorAll('[data-song]').forEach((el) => el.addEventListener('click', () => openSong(el.dataset.song, state.computed)));
+  }
+
+  function openSong(id, computed) {
+    const s = SONG_BY_ID.get(normId(id));
+    if (!s) return;
+    const mine = (computed?.list || []).filter((x) => x.id === s.id);
+    const blocks = LEVEL_NAMES.filter((lv) => s.diffs[lv] || s.notes[lv]).map((lv) => {
+      const n = s.notes[lv];
+      const best = mine.find((m) => m.rank === lv);
+      return `
+        <div class="chart-block">
+          <h4><span class="diff ${lv}">${lv}</span> 定数 ${Number(s.diffs[lv] || 0).toFixed(1)}
+            ${best ? ` · <span class="muted">你的成绩 ${best.score}（${best.acc.toFixed(2)}% · ${fmt(best.rks)}）</span>` : ''}</h4>
+          ${n ? `<div class="note-grid">
+            <div class="kv"><span>Tap</span><b>${n.tap}</b></div>
+            <div class="kv"><span>Drag</span><b>${n.drag}</b></div>
+            <div class="kv"><span>Hold</span><b>${n.hold}</b></div>
+            <div class="kv"><span>Flick</span><b>${n.flick}</b></div>
+          </div>
+          <div class="kv" style="margin-top:8px;display:flex;justify-content:space-between">
+            <span style="margin:0">物量合计</span><b>${n.combo}</b>
+          </div>` : ''}
+          <div class="kv" style="margin-top:8px"><span>谱师</span><b>${esc(s.charters[lv] || '—')}</b></div>
+        </div>`;
+    }).join('');
+
+    $('sheetBody').innerHTML = `
+      <h3>${esc(s.song)}</h3>
+      <div class="sub">${esc(s.composer)}${s.illustrator ? ` · 曲绘 ${esc(s.illustrator)}` : ''}</div>
+      <div class="grid2">
+        <div class="kv"><span>BPM</span><b>${esc(s.bpm || '—')}</b></div>
+        <div class="kv"><span>时长</span><b>${esc(s.length || '—')}</b></div>
+      </div>
+      <div class="kv" style="margin-top:10px"><span>章节</span><b>${esc(s.chapter || '—')}</b></div>
+      ${blocks || '<div class="empty">暂无谱面数据</div>'}
+    `;
+    $('sheet').classList.add('show');
+    $('sheetMask').classList.add('show');
+  }
+
+  function closeSheet() {
+    $('sheet').classList.remove('show');
+    $('sheetMask').classList.remove('show');
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  /* ---------------- 事件 ---------------- */
+
+  function switchView(view) {
+    state.view = view;
+    renderAll();
+  }
+
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      if (!state.computed && tab.dataset.view !== 'settings') {
+        toast('请先连接账号');
+        state.view = 'settings';
+        renderAll();
+        return;
+      }
+      switchView(tab.dataset.view);
+    });
+  });
+
+  $('bindBtn').addEventListener('click', () => {
+    state.token = $('tokenInput').value.trim();
+    state.server = $('serverSelect').value;
+    localStorage.setItem(LS_TOKEN, state.token);
+    localStorage.setItem(LS_SERVER, state.server);
+    sync();
+  });
+
+  $('saveTokenBtn').addEventListener('click', () => {
+    state.token = $('tokenInput2').value.trim();
+    state.server = $('serverSelect2').value;
+    localStorage.setItem(LS_TOKEN, state.token);
+    localStorage.setItem(LS_SERVER, state.server);
+    sync();
+  });
+
+  $('syncBtn').addEventListener('click', sync);
+  $('goB19Btn').addEventListener('click', () => switchView('b19'));
+  $('clearBtn').addEventListener('click', () => {
+    localStorage.removeItem(LS_TOKEN);
+    localStorage.removeItem(LS_SERVER);
+    localStorage.removeItem(LS_LAST);
+    state.token = '';
+    state.save = null;
+    state.computed = null;
+    setStatus('未绑定');
+    switchView('home');
+    toast('已清除本机数据');
+  });
+
+  $('searchInput').addEventListener('input', (e) => {
+    state.query = e.target.value;
+    renderLibrary();
+  });
+
+  $('diffChips').addEventListener('click', (e) => {
+    const chip = e.target.closest('.fchip');
+    if (!chip) return;
+    state.diffFilter = chip.dataset.diff;
+    [...$('diffChips').children].forEach((c) => c.classList.toggle('active', c === chip));
+    renderLibrary();
+  });
+
+  $('sortChips').addEventListener('click', (e) => {
+    const chip = e.target.closest('.fchip');
+    if (!chip) return;
+    state.sortMode = chip.dataset.sort;
+    [...$('sortChips').children].forEach((c) => c.classList.toggle('active', c === chip));
+    renderLibrary();
+  });
+
+  $('sheetMask').addEventListener('click', closeSheet);
+
+  /* ---------------- 启动 ---------------- */
+
+  function boot() {
+    if (state.token) {
+      $('tokenInput').value = state.token;
+      $('tokenInput2').value = state.token;
+      sync();
+    } else {
+      setStatus('未绑定');
+      renderAll();
+    }
+    if (location.search.includes('demo')) demoMode();
+  }
+
+  function demoMode() {
+    const records = {};
+    const pool = DATA.songs.filter((s) => s.diffs.IN);
+    for (let i = 0; i < 90; i++) {
+      const s = pool[(i * 37) % pool.length];
+      if (!s || records[s.id]) continue;
+      const lv = s.diffs.AT ? (i % 3 === 0 ? 'AT' : 'IN') : 'IN';
+      const score = 940000 + ((i * 7919) % 60001);
+      const acc = Math.min(100, 92 + ((i * 131) % 800) / 100);
+      records[s.id] = [];
+      // 按难度索引放置
+      const idx = LEVEL_NAMES.indexOf(lv);
+      records[s.id][idx] = { score, acc: Number(acc.toFixed(3)), fc: i % 11 === 0 };
+    }
+    const save = {
+      records,
+      progress: { money: [12, 3, 1, 0, 0], challengeModeRank: 1203 },
+      user: { selfIntro: '本地演示' },
+      summary: { rankingScore: 13.7421, challengeModeRank: 1203 },
+      nickname: 'Demo Player',
+      updatedAt: new Date().toLocaleString('zh-CN'),
+    };
+    state.save = save;
+    state.computed = compute(save);
+    setStatus('演示模式');
+    renderAll();
+  }
+
+  boot();
+})();
