@@ -330,6 +330,7 @@
   });
 
   $('syncBtn').addEventListener('click', sync);
+  $('demoBtn')?.addEventListener('click', () => { demoMode(); switchView('home'); });
   $('goB19Btn').addEventListener('click', () => switchView('b19'));
   $('clearBtn').addEventListener('click', () => {
     localStorage.removeItem(LS_TOKEN);
