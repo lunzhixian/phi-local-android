@@ -281,3 +281,17 @@ body {
   background: rgba(56,217,255,.06); border: 1px solid rgba(56,217,255,.18);
   border-radius: 14px; padding: 12px 14px; margin-top: 14px;
 }
+
+/* 分段控件与图片操作 */
+.seg {
+  display: flex; gap: 4px; padding: 4px; border-radius: 12px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--line);
+}
+.seg button {
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 12px; font-weight: 700; padding: 7px 12px; border-radius: 9px; cursor: pointer;
+}
+.seg button.active { color: #fff; background: linear-gradient(135deg, var(--accent), #5b7bff); }
+
+.actions-row { display: flex; gap: 10px; margin: 2px 0 14px; }
+.actions-row .btn { flex: 1; padding: 11px 14px; font-size: 13px; }

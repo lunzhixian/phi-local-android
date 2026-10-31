@@ -33,6 +33,7 @@
     save: null,
     computed: null,
     view: 'home',
+    n: Number(store.getItem('phi.n')) || 19,
     diffFilter: '',
     sortMode: 'diff',
     query: '',
@@ -102,10 +103,11 @@
     const money = save.progress?.money || [0, 0, 0, 0, 0];
     const dataSize = money[4] ? `${money[4]}PiB` : money[3] ? `${money[3]}TiB` : money[2] ? `${money[2]}GiB`
       : money[1] ? `${money[1]}MiB` : `${money[0] || 0}KiB`;
-    const avg = best19.length ? best19.reduce((s, x) => s + x.rks, 0) / best19.length : 0;
+    const avgOf = (n) => (list.length ? list.slice(0, n).reduce((s, x) => s + x.rks, 0) / Math.min(n, list.length) : 0);
+    const avg = avgOf(19);
     const maxDiff = list.reduce((m, x) => Math.max(m, x.difficulty), 0);
     return {
-      list, phi, best19, avg, played, fcCount, phiCount, dataSize, maxDiff,
+      list, phi, best19, avg, avgOf, played, fcCount, phiCount, dataSize, maxDiff,
       rks: summary.rankingScore || 0,
       challengeMode: save.progress?.challengeModeRank || summary.challengeModeRank || 0,
       nickname: save.nickname || 'Phigros Player',
@@ -200,13 +202,18 @@
 
   function renderB19() {
     const c = state.computed;
-    $('b19Rks').textContent = `RKS ${fmt(c.rks)} · B19 均 ${fmt(c.avg, 3)}`;
+    const n = state.n;
+    const rows = c.list.slice(0, n);
+    $('b19Rks').textContent = `RKS ${fmt(c.rks)} · B${n} 均 ${fmt(c.avgOf(n), 3)}`;
+    const t = document.getElementById('b19Title');
+    if (t) t.textContent = String(n);
+    document.querySelectorAll('#b19Seg [data-n]').forEach((b) => b.classList.toggle('active', Number(b.dataset.n) === n));
     const box = $('b19List');
-    if (!c.best19.length) {
+    if (!rows.length) {
       box.innerHTML = '<div class="empty"><div class="big">▤</div>暂无成绩数据</div>';
       return;
     }
-    box.innerHTML = c.best19.map((x, i) => `
+    box.innerHTML = rows.map((x, i) => `
       <div class="row" data-song="${esc(x.id)}">
         <div class="idx ${i < 3 ? 'top' : ''}">${i + 1}</div>
         <div class="main">
@@ -223,6 +230,59 @@
         </div>
       </div>`).join('');
     box.querySelectorAll('[data-song]').forEach((el) => el.addEventListener('click', () => openSong(el.dataset.song, c)));
+  }
+
+  /* ---------- 图片保存 / 分享 ---------- */
+
+  function cardDataUrl() {
+    const c = state.computed;
+    const label = `BEST ${state.n}`;
+    return window.PhiCard.draw(c, state.n, label);
+  }
+
+  function bridgeImage(method) {
+    return new Promise((resolve, reject) => {
+      const id = `${method}_${Date.now()}`;
+      window.__imageResolve = window.__imageResolve || {};
+      window.__imageResolve[id] = { resolve, reject };
+      try {
+        window.NativeBridge[method](cardDataUrl(), `phi-b${state.n}-${Date.now()}.png`, id);
+      } catch (e) { reject(e); }
+      setTimeout(() => {
+        if (window.__imageResolve[id]) { delete window.__imageResolve[id]; reject(new Error('保存超时')); }
+      }, 20000);
+    });
+  }
+
+  window.__imageResult = function (id, json) {
+    const task = window.__imageResolve && window.__imageResolve[id];
+    if (!task) return;
+    delete window.__imageResolve[id];
+    let res = {};
+    try { res = JSON.parse(json); } catch (e) { /* ignore */ }
+    if (res.ok) task.resolve(res); else task.reject(new Error(res.error || '操作失败'));
+  };
+
+  async function saveCard(share) {
+    if (!state.computed) { toast('请先同步成绩'); return; }
+    toast('正在生成图片…');
+    const method = share ? 'shareImage' : 'saveImage';
+    try {
+      if (window.NativeBridge && typeof window.NativeBridge[method] === 'function') {
+        const res = await bridgeImage(method);
+        toast(share ? '已打开分享' : '已保存到相册 Pictures/PhiLocal');
+        return res;
+      }
+      // 浏览器预览环境：直接下载
+      const a = document.createElement('a');
+      a.href = cardDataUrl();
+      a.download = `phi-b${state.n}.png`;
+      a.click();
+      toast('已生成图片');
+    } catch (e) {
+      console.error(e);
+      toast(String(e.message || e));
+    }
   }
 
   function renderLibrary() {
@@ -346,6 +406,15 @@
   });
 
   $('syncBtn').addEventListener('click', sync);
+  $('b19Seg')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-n]');
+    if (!btn) return;
+    state.n = Number(btn.dataset.n);
+    store.setItem('phi.n', String(state.n));
+    renderB19();
+  });
+  $('saveImgBtn')?.addEventListener('click', () => saveCard(false));
+  $('shareImgBtn')?.addEventListener('click', () => saveCard(true));
   $('demoBtn')?.addEventListener('click', () => { demoMode(); switchView('home'); });
   $('goB19Btn').addEventListener('click', () => switchView('b19'));
   $('clearBtn').addEventListener('click', () => {

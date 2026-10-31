@@ -87,8 +87,19 @@
   <!-- B19 -->
   <section id="view-b19" class="hidden">
     <div class="b19-head">
-      <h2>Best 19</h2>
-      <div class="rks" id="b19Rks">RKS --</div>
+      <div>
+        <h2>Best <span id="b19Title">19</span></h2>
+        <div class="rks" id="b19Rks">RKS --</div>
+      </div>
+      <div class="seg" id="b19Seg">
+        <button data-n="19" class="active">B19</button>
+        <button data-n="30">B30</button>
+        <button data-n="50">B50</button>
+      </div>
+    </div>
+    <div class="actions-row">
+      <button class="btn ghost" id="saveImgBtn">保存图片</button>
+      <button class="btn" id="shareImgBtn">分享</button>
     </div>
     <div id="b19List"></div>
   </section>
@@ -173,6 +184,7 @@
 <script src="vendor-jszip.js"></script>
 <script src="data.js"></script>
 <script src="save.js"></script>
+<script src="card.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

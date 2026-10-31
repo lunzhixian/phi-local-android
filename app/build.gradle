@@ -41,7 +41,7 @@ def assetsWeb = file('src/main/assets/www')
 tasks.register('syncWebAssets', Copy) {
     from webDir
     into assetsWeb
-    include 'index.html', 'style.css', 'app.js', 'save.js', 'data.js', 'vendor-*.js'
+    include '**', '!fake.zip'
 }
 
 tasks.named('preBuild').configure {

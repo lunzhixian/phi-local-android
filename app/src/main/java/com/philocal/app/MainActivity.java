@@ -15,6 +15,11 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import android.content.ContentValues;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.MediaStore;
+
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -156,6 +161,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void saveImage(String base64, String name, String callbackId) {
+            pool.execute(() -> resolveImage(callbackId, saveImageFile(base64, name, false)));
+        }
+
+        @JavascriptInterface
+        public void shareImage(String base64, String name, String callbackId) {
+            pool.execute(() -> resolveImage(callbackId, saveImageFile(base64, name, true)));
+        }
+
+        @JavascriptInterface
         public void toast(String text) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
         }
@@ -163,6 +178,64 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String appVersion() {
             return "1.0.0";
+        }
+    }
+
+    private void resolveImage(String callbackId, String json) {
+        final String js = "window.__imageResult(" + JSONObject.quote(callbackId) + "," + JSONObject.quote(json) + ");";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    /** 把 PNG base64 写入相册 Pictures/PhiLocal，可选分享 */
+    private String saveImageFile(String base64, String name, boolean share) {
+        try {
+            int comma = base64.indexOf(',');
+            String pure = comma >= 0 ? base64.substring(comma + 1) : base64;
+            byte[] png = Base64.decode(pure, Base64.DEFAULT);
+
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PhiLocal");
+                values.put(MediaStore.Images.Media.IS_PENDING, 1);
+            }
+            Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) throw new IllegalStateException("无法创建相册条目");
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os == null) throw new IllegalStateException("无法写入图片");
+                os.write(png);
+                os.flush();
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.Images.Media.IS_PENDING, 0);
+                getContentResolver().update(uri, done, null, null);
+            }
+            if (share) {
+                runOnUiThread(() -> {
+                    Intent it = new Intent(Intent.ACTION_SEND);
+                    it.setType("image/png");
+                    it.putExtra(Intent.EXTRA_STREAM, uri);
+                    it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(it, "分享成绩图"));
+                });
+            }
+            JSONObject out = new JSONObject();
+            out.put("ok", true);
+            out.put("uri", uri.toString());
+            return out.toString();
+        } catch (Exception e) {
+            try {
+                JSONObject out = new JSONObject();
+                out.put("ok", false);
+                out.put("error", "保存失败：" + e.getMessage());
+                return out.toString();
+            } catch (Exception ignored) {
+                return "{\"ok\":false,\"error\":\"保存失败\"}";
+            }
         }
     }
 
