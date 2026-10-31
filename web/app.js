@@ -11,9 +11,25 @@
   const LS_SERVER = 'phi.server';
   const LS_LAST = 'phi.lastSync';
 
+  // 某些 WebView 环境（如 file:// 源）访问 localStorage 会抛 SecurityError，这里做降级
+  const store = (() => {
+    try {
+      localStorage.setItem('__phi_probe', '1');
+      localStorage.removeItem('__phi_probe');
+      return localStorage;
+    } catch (e) {
+      const mem = new Map();
+      return {
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => mem.set(k, String(v)),
+        removeItem: (k) => mem.delete(k),
+      };
+    }
+  })();
+
   const state = {
-    token: localStorage.getItem(LS_TOKEN) || '',
-    server: localStorage.getItem(LS_SERVER) || 'cn',
+    token: store.getItem(LS_TOKEN) || '',
+    server: store.getItem(LS_SERVER) || 'cn',
     save: null,
     computed: null,
     view: 'home',
@@ -113,7 +129,7 @@
       save.updatedAt = new Date(saveInfo.modifiedAt?.iso || saveInfo.updatedAt || Date.now()).toLocaleString('zh-CN');
       state.save = save;
       state.computed = compute(save);
-      localStorage.setItem(LS_LAST, new Date().toISOString());
+      store.setItem(LS_LAST, new Date().toISOString());
       setStatus('已同步');
       renderAll();
       toast('存档同步成功');
@@ -316,16 +332,16 @@
   $('bindBtn').addEventListener('click', () => {
     state.token = $('tokenInput').value.trim();
     state.server = $('serverSelect').value;
-    localStorage.setItem(LS_TOKEN, state.token);
-    localStorage.setItem(LS_SERVER, state.server);
+    store.setItem(LS_TOKEN, state.token);
+    store.setItem(LS_SERVER, state.server);
     sync();
   });
 
   $('saveTokenBtn').addEventListener('click', () => {
     state.token = $('tokenInput2').value.trim();
     state.server = $('serverSelect2').value;
-    localStorage.setItem(LS_TOKEN, state.token);
-    localStorage.setItem(LS_SERVER, state.server);
+    store.setItem(LS_TOKEN, state.token);
+    store.setItem(LS_SERVER, state.server);
     sync();
   });
 
@@ -333,9 +349,9 @@
   $('demoBtn')?.addEventListener('click', () => { demoMode(); switchView('home'); });
   $('goB19Btn').addEventListener('click', () => switchView('b19'));
   $('clearBtn').addEventListener('click', () => {
-    localStorage.removeItem(LS_TOKEN);
-    localStorage.removeItem(LS_SERVER);
-    localStorage.removeItem(LS_LAST);
+    store.removeItem(LS_TOKEN);
+    store.removeItem(LS_SERVER);
+    store.removeItem(LS_LAST);
     state.token = '';
     state.save = null;
     state.computed = null;
