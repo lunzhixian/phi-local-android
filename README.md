@@ -11,6 +11,7 @@
 | 概览 | RKS、游玩曲目数、φ / FC 数、Data、B19 均 RKS、Challenge Mode |
 | 成绩长图 | B19 / B30 / B50 切换；长图由 **phi-plugin 原版模板 b19.art + b19.css + 官方字体/图标** 渲染（1200px 宽，与原插件截图一致），保存到相册（Pictures/PhiLocal）或分享 |
 | Best N | 按等效 RKS 排序的 B19/B30/B50 列表，含定数、分数、ACC、评级 |
+| 曲绘 | 346 首曲绘随 APK 打包（`ill-src/`，320px JPEG），成绩图完全离线，不依赖外部图床 |
 | 曲库 | 346 首曲目离线数据：曲名、曲师、谱师、BPM、时长、章节、定数、物量（Tap/Drag/Hold/Flick/Combo），支持搜索与筛选 |
 | 曲目详情 | 点击任意曲目查看各难度谱面信息与本机最好成绩 |
 | 设置 | 更换 Token / 服务器、清除本机数据 |
