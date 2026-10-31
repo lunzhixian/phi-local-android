@@ -10,3 +10,4 @@ captures/
 app/src/main/assets/www/
 *.apk
 *.keystore
+preview/
