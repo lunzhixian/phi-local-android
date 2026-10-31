@@ -16,6 +16,12 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import android.content.ContentValues;
+import android.content.Context;
+import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.Intent;
 import android.net.Uri;
 import android.provider.MediaStore;
@@ -35,6 +41,13 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private boolean loadedFallback = false;
+
+    private WebView captureView;
+    private String captureCallback;
+    private String captureMode;
+    private String captureData;
+    private int captureCssW = 1200;
+    private int captureCssH = 4000;
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -106,6 +119,9 @@ public class MainActivity extends Activity {
         if (path.endsWith(".png")) return "image/png";
         if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
         if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".ttf")) return "font/ttf";
+        if (path.endsWith(".otf")) return "font/otf";
+        if (path.endsWith(".woff")) return "font/woff";
         if (path.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
     }
@@ -161,6 +177,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void renderB19(String dataJson, String mode, String callbackId) {
+            runOnUiThread(() -> startCapture(dataJson, mode, callbackId));
+        }
+
+        @JavascriptInterface
         public void saveImage(String base64, String name, String callbackId) {
             pool.execute(() -> resolveImage(callbackId, saveImageFile(base64, name, false)));
         }
@@ -178,6 +199,158 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String appVersion() {
             return "1.0.0";
+        }
+    }
+
+    /** 用 1x 密度上下文创建 WebView，让 1200px 模板按原尺寸渲染 */
+    private void startCapture(String dataJson, String mode, String callbackId) {
+        cleanupCapture();
+        captureData = dataJson;
+        captureMode = mode;
+        captureCallback = callbackId;
+
+        Configuration cfg = new Configuration(getResources().getConfiguration());
+        cfg.densityDpi = 160;
+        cfg.fontScale = 1f;
+        Context oneX = createConfigurationContext(cfg);
+
+        captureView = new WebView(oneX);
+        captureView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        captureView.setBackgroundColor(Color.WHITE);
+        WebSettings cs = captureView.getSettings();
+        cs.setJavaScriptEnabled(true);
+        cs.setDomStorageEnabled(true);
+        cs.setAllowFileAccess(true);
+        cs.setAllowFileAccessFromFileURLs(true);
+        cs.setAllowUniversalAccessFromFileURLs(true);
+        cs.setLoadsImagesAutomatically(true);
+        cs.setBlockNetworkImage(false);
+        captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
+        captureView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                view.evaluateJavascript("window.__render(" + JSONObject.quote(captureData) + ")", null);
+            }
+        });
+        captureView.loadUrl("https://appassets.local/plugin/render.html");
+    }
+
+    private class CaptureBridge {
+        @JavascriptInterface
+        public void ready(int w, int h) {
+            runOnUiThread(() -> captureAndSave(Math.max(1, w), Math.max(1, h)));
+        }
+
+        @JavascriptInterface
+        public void fail(String msg) {
+            runOnUiThread(() -> {
+                finishCapture(failJson("模板渲染失败：" + msg));
+            });
+        }
+    }
+
+    private void captureAndSave(int w, int h) {
+        if (captureView == null) return;
+        captureCssW = Math.min(w, 2000);
+        captureCssH = Math.max(1, h);
+        try {
+            captureView.measure(
+                    View.MeasureSpec.makeMeasureSpec(captureCssW, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(captureCssH, View.MeasureSpec.EXACTLY));
+            captureView.layout(0, 0, captureCssW, captureCssH);
+        } catch (Exception e) {
+            finishCapture(failJson("页面布局失败：" + e.getMessage()));
+            return;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(this::drawCapture, 400);
+    }
+
+    private void drawCapture() {
+        if (captureView == null) return;
+        Bitmap bmp = null;
+        try {
+            bmp = Bitmap.createBitmap(captureCssW, captureCssH, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bmp);
+            canvas.drawColor(Color.WHITE);
+            captureView.draw(canvas);
+            // 顶部若全是白色，说明 WebView 没画出来
+            int sample = bmp.getPixel(Math.min(captureCssW - 1, 10), Math.min(captureCssH - 1, 10));
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            String json = savePngAndRespond(bos.toByteArray(), captureMode, sample);
+            finishCapture(json);
+        } catch (Throwable t) {
+            finishCapture(failJson("截图失败：" + t.getMessage()));
+        } finally {
+            if (bmp != null) bmp.recycle();
+        }
+    }
+
+    private String savePngAndRespond(byte[] png, String mode, int sample) {
+        try {
+            ContentValues values = new ContentValues();
+            String name = "phi-b30-" + System.currentTimeMillis() + ".png";
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PhiLocal");
+                values.put(MediaStore.Images.Media.IS_PENDING, 1);
+            }
+            Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) throw new IllegalStateException("无法创建相册条目");
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                os.write(png);
+                os.flush();
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.Images.Media.IS_PENDING, 0);
+                getContentResolver().update(uri, done, null, null);
+            }
+            if ("share".equals(mode)) {
+                runOnUiThread(() -> {
+                    Intent it = new Intent(Intent.ACTION_SEND);
+                    it.setType("image/png");
+                    it.putExtra(Intent.EXTRA_STREAM, uri);
+                    it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(it, "分享成绩图"));
+                });
+            }
+            JSONObject out = new JSONObject();
+            out.put("ok", true);
+            out.put("uri", uri.toString());
+            out.put("sample", sample);
+            return out.toString();
+        } catch (Exception e) {
+            return failJson("保存失败：" + e.getMessage());
+        }
+    }
+
+    private String failJson(String msg) {
+        try {
+            JSONObject out = new JSONObject();
+            out.put("ok", false);
+            out.put("error", msg);
+            return out.toString();
+        } catch (Exception e) {
+            return "{\"ok\":false}";
+        }
+    }
+
+    private void finishCapture(String json) {
+        String cb = captureCallback;
+        cleanupCapture();
+        if (cb != null) resolveImage(cb, json);
+    }
+
+    private void cleanupCapture() {
+        captureCallback = null;
+        captureMode = null;
+        captureData = null;
+        final WebView v = captureView;
+        captureView = null;
+        if (v != null) {
+            try { v.loadUrl("about:blank"); v.destroy(); } catch (Exception ignored) { }
         }
     }
 

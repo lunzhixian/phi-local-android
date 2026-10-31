@@ -33,7 +33,7 @@
     save: null,
     computed: null,
     view: 'home',
-    n: Number(store.getItem('phi.n')) || 19,
+    n: Number(store.getItem('phi.n')) || 30,
     diffFilter: '',
     sortMode: 'diff',
     query: '',
@@ -232,6 +232,121 @@
     box.querySelectorAll('[data-song]').forEach((el) => el.addEventListener('click', () => openSong(el.dataset.song, c)));
   }
 
+  /* ---------- 原版模板数据 ---------- */
+
+  let avatarList = null;
+  async function avatarName() {
+    const id = state.save?.user?.avatar || '';
+    if (avatarList === null) {
+      try { avatarList = await (await fetch('plugin/html/avatar/index.json')).json(); } catch (e) { avatarList = []; }
+    }
+    if (avatarList.includes(id)) return id;
+    if (id === 'Cipher : /2&//<|0') return 'Cipher1';
+    if (id === 'Oblivion: PHIN') return 'OblivionPHIN';
+    return 'Introduction';
+  }
+
+  function rateScore(real, fc, total) {
+    if (real === total && total > 0) return 'phi';
+    if (fc) return 'FC';
+    if (real >= total * 0.96) return 'V';
+    if (real >= total * 0.92) return 'S';
+    if (real >= total * 0.88) return 'A';
+    if (real >= total * 0.82) return 'B';
+    if (real >= total * 0.70) return 'C';
+    if (real > 0) return 'F';
+    return 'NEW';
+  }
+
+  function buildStats(computed) {
+    const levels = ['EZ', 'HD', 'IN', 'AT'];
+    const out = levels.map((title) => ({ title, tot: 0, unlock: 0, cleared: 0, fc: 0, phi: 0, real_score: 0, tot_score: 0, Rating: 'NEW' }));
+    const tot = levels.map((lv) => DATA.songs.filter((s) => Number(s.diffs[lv]) > 0).length);
+    const rec = state.save?.records || {};
+    for (const id of Object.keys(rec)) {
+      const song = SONG_BY_ID.get(normId(id));
+      if (!song) continue;
+      for (let lv = 0; lv < 4; lv++) {
+        const r = rec[id][lv];
+        if (!r || !Number(song.diffs[levels[lv]])) continue;
+        out[lv].unlock++;
+        if (r.score >= 700000) out[lv].cleared++;
+        if (r.fc || r.score === 1000000) out[lv].fc++;
+        if (r.score === 1000000) out[lv].phi++;
+        out[lv].real_score += r.score;
+        out[lv].tot_score += 1000000;
+      }
+    }
+    out.forEach((o, i) => {
+      o.tot = tot[i];
+      o.Rating = rateScore(o.real_score, o.unlock > 0 && o.fc === o.unlock, o.tot_score);
+    });
+    return out;
+  }
+
+  function suggestFor(item, i, rest, minuprks) {
+    if (!item.difficulty) return { text: '无法推分', type: 5 };
+    const base = i < 26 ? item.rks : (rest[26]?.rks ?? item.rks);
+    const target = base + minuprks * 30;
+    const acc = 45 * Math.sqrt(Math.max(0, target) / item.difficulty) + 55;
+    if (acc >= 100 || !isFinite(acc)) return { text: '无法推分', type: 5 };
+    const type = acc < 98.5 ? 0 : acc < 99 ? 1 : acc < 99.5 ? 2 : acc < 99.7 ? 3 : acc < 99.85 ? 4 : 5;
+    return { text: `${acc.toFixed(2)}%`, type };
+  }
+
+  async function buildB19Data(computed) {
+    const list = computed.list;
+    const phi = list.filter((x) => x.acc >= 100).slice(0, 3);
+    const rest = list.filter((x) => !phi.includes(x));
+    const best27 = rest.slice(0, 27);
+    const phiSum = phi.reduce((s, x) => s + x.rks, 0);
+    const bestSum = best27.reduce((s, x) => s + x.rks, 0);
+    const comRks = (phiSum + bestSum) / 30;
+    const userrks = Number(computed.rks) || 0;
+    let minuprks = Math.floor(userrks * 100) / 100 + 0.005 - userrks;
+    if (minuprks < 0) minuprks += 0.01;
+    const ill = (id) => `https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/illLow/${encodeURIComponent(id)}.png`;
+    const rows = list.slice(0, computed.n || 19).map((x, i) => {
+      const sug = suggestFor(x, i, rest, minuprks);
+      return {
+        id: x.id, song: x.song, rank: x.rank, difficulty: x.difficulty,
+        score: x.score, acc: x.acc, rks: x.rks, Rating: x.rating,
+        suggest: sug.text, suggestType: sug.type, illustration: ill(x.id), num: i + 1,
+      };
+    });
+    return {
+      phi: phi.length ? phi.map((x) => ({ ...x, Rating: x.rating, illustration: ill(x.id) })) : undefined,
+      b19_list: rows,
+      PlayerId: computed.nickname,
+      Rks: comRks.toFixed(4),
+      Date: computed.updatedAt || '',
+      ChallengeMode: Math.floor(computed.challengeMode / 100),
+      ChallengeModeRank: computed.challengeMode % 100,
+      background: 'https://appassets.local/plugin/html/otherimg/phigros.png',
+      theme: 'star',
+      gameuser: {
+        avatar: await avatarName(),
+        PlayerId: computed.nickname,
+        rks: comRks,
+        data: computed.dataSize,
+        ChallengeMode: Math.floor(computed.challengeMode / 100),
+        ChallengeModeRank: computed.challengeMode % 100,
+        selfIntro: state.save?.user?.selfIntro || '',
+      },
+      nnum: computed.n || 19,
+      stats: buildStats(computed),
+      spInfo: [],
+      _res_path: 'https://appassets.local/plugin/',
+      defaultLayout: '',
+      renderNoJs: false,
+      sys: { scale: '', copyright: '' },
+      Version: { ver: '1.1.0', yunzai: '' },
+    };
+  }
+
+  window.__buildB19Data = buildB19Data;
+  window.__phiState = state;
+
   /* ---------- 图片保存 / 分享 ---------- */
 
   function cardDataUrl() {
@@ -265,24 +380,52 @@
 
   async function saveCard(share) {
     if (!state.computed) { toast('请先同步成绩'); return; }
-    toast('正在生成图片…');
-    const method = share ? 'shareImage' : 'saveImage';
-    try {
-      if (window.NativeBridge && typeof window.NativeBridge[method] === 'function') {
-        const res = await bridgeImage(method);
+    const mode = share ? 'share' : 'save';
+    if (window.NativeBridge && typeof window.NativeBridge.renderB19 === 'function') {
+      toast('正在按原版模板生成…');
+      try {
+        const data = await buildB19Data(state.computed);
+        const res = await nativePromise('renderB19', JSON.stringify(data), mode);
         toast(share ? '已打开分享' : '已保存到相册 Pictures/PhiLocal');
         return res;
+      } catch (e) {
+        console.error(e);
+        toast('原版模板渲染失败，改用内置绘制：' + (e.message || e));
       }
-      // 浏览器预览环境：直接下载
-      const a = document.createElement('a');
-      a.href = cardDataUrl();
-      a.download = `phi-b${state.n}.png`;
-      a.click();
-      toast('已生成图片');
+    }
+    // 回退：Canvas 绘制
+    try {
+      const url = window.PhiCard.draw(state.computed, state.n, `BEST ${state.n}`);
+      if (window.NativeBridge && typeof window.NativeBridge.saveImage === 'function') {
+        const id = `img_${Date.now()}`;
+        window.__imageResolve = window.__imageResolve || {};
+        const p = new Promise((resolve, reject) => {
+          window.__imageResolve[id] = { resolve, reject };
+          window.NativeBridge[mode === 'share' ? 'shareImage' : 'saveImage'](url, `phi-b${state.n}.png`, id);
+        });
+        await p;
+        toast(share ? '已打开分享' : '已保存到相册');
+      } else {
+        const a = document.createElement('a');
+        a.href = url; a.download = `phi-b${state.n}.png`; a.click();
+      }
     } catch (e) {
-      console.error(e);
       toast(String(e.message || e));
     }
+  }
+
+  /** 调用原生桥并等待回调 */
+  function nativePromise(method, ...args) {
+    return new Promise((resolve, reject) => {
+      const id = `${method}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const timer = setTimeout(() => { delete window.__imageResolve[id]; reject(new Error('生成超时')); }, 90000);
+      window.__imageResolve = window.__imageResolve || {};
+      window.__imageResolve[id] = {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      };
+      window.NativeBridge[method](...args, id);
+    });
   }
 
   function renderLibrary() {

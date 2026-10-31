@@ -9,7 +9,7 @@
 | --- | --- |
 | 账号 | 输入 25 位 Session Token（国服 / 国际服），拉取最新云存档 |
 | 概览 | RKS、游玩曲目数、φ / FC 数、Data、B19 均 RKS、Challenge Mode |
-| 成绩长图 | B19 / B30 / B50 切换，一键生成 1080 宽的成绩长图，保存到相册（Pictures/PhiLocal）或直接分享 |
+| 成绩长图 | B19 / B30 / B50 切换；长图由 **phi-plugin 原版模板 b19.art + b19.css + 官方字体/图标** 渲染（1200px 宽，与原插件截图一致），保存到相册（Pictures/PhiLocal）或分享 |
 | Best N | 按等效 RKS 排序的 B19/B30/B50 列表，含定数、分数、ACC、评级 |
 | 曲库 | 346 首曲目离线数据：曲名、曲师、谱师、BPM、时长、章节、定数、物量（Tap/Drag/Hold/Flick/Combo），支持搜索与筛选 |
 | 曲目详情 | 点击任意曲目查看各难度谱面信息与本机最好成绩 |
@@ -17,8 +17,13 @@
 
 ## 截图保存
 
-B19 页右上角切换 B19 / B30 / B50，底部「保存图片」「分享」会调用 Canvas 生成 1080px 宽的长图，
-由原生 `MediaStore` 写入 `Pictures/PhiLocal`（相册可见），分享走系统 `ACTION_SEND`。
+B19 页右上角切换 B19 / B30 / B50，底部「保存图片」「分享」会：
+
+1. 用预编译的**原版 art-template 模板**（`web/plugin/b19-tpl.js`，由 `tools/prepare-assets.mjs` 生成）在离屏 WebView 中渲染；
+2. 以 1x 密度布局（1200px 宽，等同 Chromium `deviceScaleFactor=1` 的原插件截图），`View.draw` 抓成位图；
+3. 原生 `MediaStore` 写入 `Pictures/PhiLocal`，分享走 `ACTION_SEND`。
+
+若模板渲染异常，自动回退到内置 Canvas 绘制。
 
 原插件里的 QQ 相关能力（群聊指令、@、图片发送、排行、货币、猜歌、机器人管理、接口配置等）全部移除。
 

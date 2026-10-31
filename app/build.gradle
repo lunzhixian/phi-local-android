@@ -10,8 +10,8 @@ android {
         applicationId "com.philocal.phi"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.1.0"
+        versionCode 3
+        versionName "1.2.0"
     }
 
     buildTypes {
@@ -41,7 +41,8 @@ def assetsWeb = file('src/main/assets/www')
 tasks.register('syncWebAssets', Copy) {
     from webDir
     into assetsWeb
-    include 'index.html', 'style.css', 'app.js', 'save.js', 'card.js', 'data.js', 'vendor-*.js'
+    exclude '**/*.zip'
+    exclude 'preview/**'
 }
 
 tasks.named('preBuild').configure {
