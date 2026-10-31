@@ -273,7 +273,11 @@ public class MainActivity extends Activity {
             Canvas canvas = new Canvas(bmp);
             canvas.drawColor(Color.WHITE);
             captureView.draw(canvas);
-            // 顶部若全是白色，说明 WebView 没画出来
+            // 采样若干点，若全是纯白，说明离屏 WebView 没真正绘制，交给 JS 回退
+            if (isBlank(bmp)) {
+                finishCapture(failJson("离屏渲染无内容"));
+                return;
+            }
             int sample = bmp.getPixel(Math.min(captureCssW - 1, 10), Math.min(captureCssH - 1, 10));
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
             bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
@@ -284,6 +288,22 @@ public class MainActivity extends Activity {
         } finally {
             if (bmp != null) bmp.recycle();
         }
+    }
+
+    /** 判断截图是否一片空白（纯白/透明） */
+    private boolean isBlank(Bitmap bmp) {
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        int[][] pts = {{10, 10}, {w / 2, h / 2}, {w / 2, Math.max(1, h / 4)}, {w - 11, Math.max(1, h - 11)}, {w / 3, Math.max(1, (int) (h * 0.75))}};
+        for (int[] pt : pts) {
+            int x = Math.max(0, Math.min(w - 1, pt[0]));
+            int y = Math.max(0, Math.min(h - 1, pt[1]));
+            int c = bmp.getPixel(x, y);
+            int a = (c >>> 24) & 0xff;
+            int r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+            if (a > 8 && !(r > 248 && g > 248 && b > 248)) return false;
+        }
+        return true;
     }
 
     private String savePngAndRespond(byte[] png, String mode, int sample) {
