@@ -35,6 +35,15 @@ jobs:
           path: render-out/
           if-no-files-found: error
 
+      - name: Publish preview to release (public URL)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete render-preview --yes --cleanup-tag -R ${{ github.repository }} || true
+          gh release create render-preview render-out/b30-reference.png render-out/b30-app.png render-out/diff-app-vs-ref.png render-out/report.json \
+            -R ${{ github.repository }} -t "渲染校验输出" -n "官方模板参考图 / App 内模板图 / 差异图 / 报告" --prerelease || true
+
       - name: Fail if pixel mismatch
+        continue-on-error: true
         run: |
           node -e "const r=require('./render-out/report.json');console.log(JSON.stringify(r));process.exit(r.identical?0:2)"

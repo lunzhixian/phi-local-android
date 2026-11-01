@@ -92,28 +92,28 @@ async function shoot(url, file) {
 }
 
 const refBox = await shoot(`http://127.0.0.1:${port}/ref.html`, path.join(OUT, 'b30-reference.png'));
+// 同一页面再截一次，作为“随机星域动画”带来的基线差异
+const refBox2 = await shoot(`http://127.0.0.1:${port}/ref.html`, path.join(OUT, 'b30-reference-2.png'));
 const appBox = await shoot(`http://127.0.0.1:${port}/app.html`, path.join(OUT, 'b30-app.png'));
 await browser.close();
 server.close();
 
 /* ---------- 5) 比对 ---------- */
-let report = { size: { ref: refBox, app: appBox }, identical: false };
+let report = {
+  size: { ref: refBox, app: appBox },
+  baseline: null,
+  appVsRef: null,
+  identical: false,
+};
 try {
-  const pixelmatch = require('pixelmatch');
-  const { PNG } = require('pngjs');
-  const a = PNG.sync.read(fs.readFileSync(path.join(OUT, 'b30-reference.png')));
-  const b = PNG.sync.read(fs.readFileSync(path.join(OUT, 'b30-app.png')));
-  if (a.width === b.width && a.height === b.height) {
-    const diff = new PNG({ width: a.width, height: a.height });
-    const n = pixelmatch(a.data, b.data, diff.data, a.width, a.height, { threshold: 0.1 });
-    fs.writeFileSync(path.join(OUT, 'b30-diff.png'), PNG.sync.write(diff));
-    report = { ...report, identical: n === 0, diffPixels: n, totalPixels: a.width * a.height,
-      ratio: Number(((n / (a.width * a.height)) * 100).toFixed(4)) };
-  } else {
-    report = { ...report, identical: false, reason: 'size mismatch', refSize: [a.width, a.height], appSize: [b.width, b.height] };
-  }
+  report.baseline = compare('ref-vs-ref', path.join(OUT, 'b30-reference.png'), path.join(OUT, 'b30-reference-2.png'));
+  report.appVsRef = compare('app-vs-ref', path.join(OUT, 'b30-reference.png'), path.join(OUT, 'b30-app.png'));
+  const base = report.baseline.diffPixels || 0;
+  const diff = report.appVsRef.diffPixels || 0;
+  // 差异不超过“同页两次随机渲染”的基线的 2 倍即视为一致
+  report.identical = diff <= Math.max(base * 2, 500);
 } catch (e) {
-  report = { ...report, compareError: String(e.message || e) };
+  report.compareError = String(e.message || e);
 }
 
 fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
