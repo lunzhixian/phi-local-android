@@ -46,7 +46,13 @@
             var bodyRect = document.body.getBoundingClientRect();
             var w = Math.ceil(Math.max(bodyRect.width, document.body.scrollWidth, 1200));
             var h = Math.ceil(Math.max(bodyRect.height, document.body.scrollHeight));
-            if (window.CaptureBridge) window.CaptureBridge.ready(w, h);
+            var info = JSON.stringify({
+              iw: window.innerWidth, ih: window.innerHeight,
+              dpr: window.devicePixelRatio,
+              sw: document.body.scrollWidth, sh: document.body.scrollHeight,
+              bw: Math.round(bodyRect.width), bh: Math.round(bodyRect.height)
+            });
+            if (window.CaptureBridge) window.CaptureBridge.readyInfo(w, h, info);
           });
         });
       }, 150);

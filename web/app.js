@@ -655,11 +655,18 @@
   /** 安装后自检：用示例数据跑一遍原版模板出图 */
   window.__selfTest = async function () {
     try {
+      if (state.token) return 'skip'; // 已绑定账号的用户不打扰
       demoMode();
       await new Promise((r) => setTimeout(r, 300));
       state.view = 'b19';
       renderAll();
       await saveCard(false);
+      // 自检结束后恢复成“未绑定”界面，不要留下测试账号
+      state.save = null;
+      state.computed = null;
+      state.view = 'home';
+      setStatus('未绑定');
+      renderAll();
       return 'ok';
     } catch (e) {
       return 'err:' + (e && e.message);

@@ -55,6 +55,8 @@ public class MainActivity extends Activity {
     private String captureData;
     private int captureW = CARD_WIDTH;
     private int captureH = 1200;
+    private int cssW = CARD_WIDTH;
+    private int cssH = 1200;
     private int captureTries = 0;
     private final StringBuilder diag = new StringBuilder();
 
@@ -261,6 +263,17 @@ public class MainActivity extends Activity {
 
     private void writeDiag() {
         try {
+            java.io.File ext = getExternalFilesDir(null);
+            if (ext != null) {
+                java.io.File f = new java.io.File(ext, "phi-diag.txt");
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
+                    fos.write(diag.toString().getBytes("UTF-8"));
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.e("PhiCard", "ext diag failed", e);
+        }
+        try {
             ContentValues v = new ContentValues();
             v.put(MediaStore.MediaColumns.DISPLAY_NAME, "phi-diag.txt");
             v.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
@@ -332,6 +345,14 @@ public class MainActivity extends Activity {
 
     private class CaptureBridge {
         @JavascriptInterface
+        public void readyInfo(int w, int h, String info) {
+            runOnUiThread(() -> {
+                log("page info " + info);
+                captureAndSave(Math.max(1, w), Math.max(1, h));
+            });
+        }
+
+        @JavascriptInterface
         public void ready(int w, int h) {
             runOnUiThread(() -> {
                 log("js ready " + w + "x" + h);
@@ -348,10 +369,22 @@ public class MainActivity extends Activity {
         }
     }
 
+    private float viewDensity() {
+        try {
+            return Math.max(1f, captureView.getResources().getDisplayMetrics().density);
+        } catch (Exception e) {
+            return Math.max(1f, getResources().getDisplayMetrics().density);
+        }
+    }
+
     private void captureAndSave(int w, int h) {
         if (captureView == null || captureHost == null) return;
-        captureW = Math.min(w, 2400);
-        captureH = Math.max(1, h);
+        float d = viewDensity();
+        cssW = Math.max(600, Math.min(w, 2000));
+        cssH = Math.max(1, h);
+        captureW = Math.round(cssW * d);
+        captureH = Math.round(cssH * d);
+        log("page css=" + cssW + "x" + cssH + " density=" + d + " view=" + captureW + "x" + captureH);
         ViewGroup.LayoutParams lp = captureView.getLayoutParams();
         lp.width = captureW;
         lp.height = captureH;
@@ -362,7 +395,7 @@ public class MainActivity extends Activity {
         captureHost.setLayoutParams(hp);
         captureView.requestLayout();
         captureHost.requestLayout();
-        new Handler(Looper.getMainLooper()).postDelayed(this::pixelCopyCapture, 600);
+        new Handler(Looper.getMainLooper()).postDelayed(this::drawScaledCapture, 700);
     }
 
     /** 优先用 PixelCopy 抓真实窗口像素（最接近系统截图），失败再退回 view.draw */
@@ -406,6 +439,45 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             log("pixelcopy exception " + t);
             drawCapture();
+        }
+    }
+
+    /** 按 CSS 尺寸输出：view 按设备密度布局，画布缩放 1/density */
+    private void drawScaledCapture() {
+        if (captureView == null) return;
+        Bitmap bmp = null;
+        try {
+            float d = viewDensity();
+            bmp = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bmp);
+            canvas.drawColor(Color.WHITE);
+            canvas.scale(1f / d, 1f / d);
+            captureView.draw(canvas);
+            if (isBlank(bmp)) {
+                log("scaled draw blank, fallback pixelcopy");
+                bmp.recycle();
+                bmp = null;
+                pixelCopyCapture();
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            byte[] png = bos.toByteArray();
+            String name = "phi-card-" + System.currentTimeMillis() + ".png";
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
+                fos.write(png); fos.flush();
+            }
+            log("captured css=" + cssW + "x" + cssH + " png=" + png.length);
+            String result = writeToGallery(png, captureMode, name);
+            log("gallery: " + result);
+            finishCapture(withPreview(result, name));
+        } catch (Throwable t) {
+            log("scaled draw failed: " + t);
+            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
+            bmp = null;
+            pixelCopyCapture();
+        } finally {
+            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
         }
     }
 
