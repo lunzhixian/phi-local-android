@@ -417,7 +417,11 @@ public class MainActivity extends Activity {
         public void ready(int w, int h) {
             runOnUiThread(() -> {
                 log("js ready " + w + "x" + h);
-                captureAndSave(Math.max(1, w), Math.max(1, h));
+                pageDpr = viewDensity();
+                tileCssH = 700;
+                resizeCapture(Math.round(CARD_WIDTH * pageDpr), Math.round(tileCssH * pageDpr));
+                new Handler(Looper.getMainLooper()).postDelayed(
+                        () -> beginTiles(Math.max(600, Math.min(w, 2000)), Math.max(1, h)), 400);
             });
         }
 
@@ -457,6 +461,100 @@ public class MainActivity extends Activity {
             v = v.substring(1, v.length() - 1).replace("\\\"", "\"").replace("\\\\", "\\");
         }
         return v;
+    }
+
+    /** 分块截图：滚动 → PixelCopy 抓真实窗口像素 → 缩放拼进最终位图 */
+    private void captureTile(final int index) {
+        if (captureView == null || tileBitmap == null) return;
+        final int offset = index * tileCssH;
+        if (offset >= cssH) {
+            finishTiles();
+            return;
+        }
+        captureView.evaluateJavascript("window.scrollTo(0," + offset + ")", null);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (captureView == null || tileBitmap == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                drawTileDirect(index, offset);
+                return;
+            }
+            int[] loc = new int[2];
+            captureView.getLocationInWindow(loc);
+            int vw = Math.min(captureView.getWidth(), Math.round(cssW * pageDpr));
+            int vh = captureView.getHeight();
+            try {
+                final Bitmap tile = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
+                android.graphics.Rect rect = new android.graphics.Rect(loc[0], loc[1], loc[0] + vw, loc[1] + vh);
+                android.view.PixelCopy.request(getWindow(), rect, tile, (result) -> {
+                    if (result == android.view.PixelCopy.SUCCESS) {
+                        float d = pageDpr > 1 ? pageDpr : viewDensity();
+                        tileCanvas.save();
+                        tileCanvas.scale(1f / d, 1f / d);
+                        tileCanvas.translate(0, offset);
+                        tileCanvas.drawBitmap(tile, 0, 0, null);
+                        tileCanvas.restore();
+                        log("tile " + index + " pixelcopy ok offset=" + offset);
+                        tile.recycle();
+                    } else {
+                        log("tile " + index + " pixelcopy failed " + result);
+                        tile.recycle();
+                        drawTileDirect(index, offset);
+                        return;
+                    }
+                    captureTile(index + 1);
+                }, new Handler(Looper.getMainLooper()));
+            } catch (Throwable t) {
+                log("tile " + index + " exception " + t);
+                drawTileDirect(index, offset);
+            }
+        }, 320);
+    }
+
+    private void drawTileDirect(int index, int offset) {
+        if (captureView == null || tileBitmap == null) return;
+        try {
+            float d = pageDpr > 1 ? pageDpr : viewDensity();
+            tileCanvas.save();
+            tileCanvas.scale(1f / d, 1f / d);
+            tileCanvas.translate(0, offset);
+            captureView.draw(tileCanvas);
+            tileCanvas.restore();
+            log("tile " + index + " draw direct offset=" + offset);
+        } catch (Throwable t) {
+            log("tile " + index + " draw direct failed " + t);
+        }
+        captureTile(index + 1);
+    }
+
+    private void finishTiles() {
+        Bitmap bmp = tileBitmap;
+        tileBitmap = null;
+        tileCanvas = null;
+        if (bmp == null) { finishCapture(failJson("截图为空")); return; }
+        try {
+            if (isBlank(bmp)) {
+                log("tiles blank");
+                bmp.recycle();
+                finishCapture(failJson("截图空白"));
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            byte[] png = bos.toByteArray();
+            String name = "phi-card-" + System.currentTimeMillis() + ".png";
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
+                fos.write(png); fos.flush();
+            }
+            log("captured tiles css=" + cssW + "x" + cssH + " png=" + png.length);
+            dumpPreview(bmp, "tiles");
+            String result = writeToGallery(png, captureMode, name);
+            log("gallery: " + result);
+            finishCapture(withPreview(result, name));
+        } catch (Throwable t) {
+            log("finish tiles failed " + t);
+            finishCapture(failJson("截图失败：" + t.getMessage()));
+        } finally {
+            if (!bmp.isRecycled()) bmp.recycle();
+        }
     }
 
     private void beginTiles(int w, int h) {
