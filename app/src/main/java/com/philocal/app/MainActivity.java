@@ -56,6 +56,10 @@ public class MainActivity extends Activity {
     private int captureW = CARD_WIDTH;
     private int captureH = 1200;
     private float pageDpr = 1f;
+    private int tileCssH = 900;
+    private int tileIndex = 0;
+    private Bitmap tileBitmap;
+    private Canvas tileCanvas;
     private int cssW = CARD_WIDTH;
     private int cssH = 1200;
     private int captureTries = 0;
@@ -328,21 +332,20 @@ public class MainActivity extends Activity {
         captureCallback = callbackId;
         captureTries = 0;
 
-        // 1x 密度上下文：1 CSS px == 1 物理像素，等价 Chromium 的 deviceScaleFactor=1
-        Configuration cfg = new Configuration(getResources().getConfiguration());
-        cfg.densityDpi = 160;
-        cfg.fontScale = 1f;
-        Context oneX = createConfigurationContext(cfg);
-
+        // 用系统真实密度：WebView 的 devicePixelRatio 取的是屏幕密度，
+        // 伪造 1x 上下文只会让“排版 1:1、绘制 3.75x”，结果就是只剩左上角一块。
+        float d0 = Math.max(1f, getResources().getDisplayMetrics().density);
+        int initW = Math.round(CARD_WIDTH * d0);
+        int initH = Math.round(1200 * d0);
         diag.append("=== render ").append(System.currentTimeMillis()).append(" mode=").append(mode).append(" ===\n");
         log("data bytes=" + dataJson.length());
 
         captureHost = new FrameLayout(this);
         captureHost.setBackgroundColor(Color.parseColor("#F2070A12"));
 
-        captureView = new WebView(oneX);
+        captureView = new WebView(this);
         captureView.setBackgroundColor(Color.WHITE);
-        captureView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+
         configure(captureView.getSettings());
         captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
         captureView.setWebViewClient(new AssetClient() {
@@ -356,13 +359,15 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        captureHost.addView(captureView, new FrameLayout.LayoutParams(captureW, captureH));
+        captureW = initW;
+        captureH = initH;
+        captureHost.addView(captureView, new FrameLayout.LayoutParams(initW, initH));
 
         // 必须真正参与绘制：作为最上层、大小等于卡片，短暂覆盖在界面上
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         root.addView(captureHost, lp);
-        log("host added " + captureW + "x" + captureH);
+        log("host added " + initW + "x" + initH + " density=" + d0 + " dprFromPage=" + 0);
 
         captureView.loadUrl("https://" + ASSET_HOST + "/plugin/render.html");
         log("loading render.html");
@@ -373,24 +378,28 @@ public class MainActivity extends Activity {
         public void readyInfo(int w, int h, String info) {
             runOnUiThread(() -> {
                 log("page info " + info);
+                pageDpr = viewDensity();
+                int pageCssH = h;
                 try {
                     JSONObject o = new JSONObject(info);
-                    int iw = o.optInt("iw", captureW);
-                    pageDpr = iw > 0 ? Math.max(1f, (float) captureW / iw) : viewDensity();
+                    pageDpr = (float) o.optDouble("dpr", pageDpr);
+                    pageCssH = o.optInt("bh", h);
                 } catch (Exception e) {
-                    pageDpr = viewDensity();
+                    // 用资源密度兜底
                 }
-                log("dpr=" + pageDpr + " viewW was " + captureW);
+                if (pageDpr < 1f) pageDpr = viewDensity();
+                log("dpr=" + pageDpr + " cssH=" + pageCssH);
                 // 目标：让页面 CSS 宽度 = 1200，再按 dpr 放大视图
                 int wantW = Math.round(CARD_WIDTH * pageDpr);
+                final int fCssH = pageCssH;
                 if (Math.abs(wantW - captureW) > 2) {
-                    resizeCapture(wantW, Math.round(Math.max(h, 200) * pageDpr));
+                    resizeCapture(wantW, Math.round(Math.max(fCssH, 200) * pageDpr));
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                         if (captureView == null) return;
                         captureView.evaluateJavascript(
                                 "window.__measure ? window.__measure() : null",
                                 value -> {
-                                    if (value == null) { captureAndSave(w, h); return; }
+                                    if (value == null) { captureAndSave(CARD_WIDTH, fCssH); return; }
                                     try {
                                         String json = value;
                                         if (json.startsWith("\"") && json.endsWith("\"")) {
@@ -398,17 +407,17 @@ public class MainActivity extends Activity {
                                         }
                                         JSONObject m = new JSONObject(json);
                                         int mw = m.optInt("w", CARD_WIDTH);
-                                        int mh = m.optInt("h", h);
+                                        int mh = m.optInt("h", fCssH);
                                         log("re-measured css=" + mw + "x" + mh);
                                         captureAndSave(mw, mh);
                                     } catch (Exception ex) {
                                         log("measure parse failed " + ex);
-                                        captureAndSave(w, h);
+                                        captureAndSave(CARD_WIDTH, fCssH);
                                     }
                                 });
                     }, 500);
                 } else {
-                    captureAndSave(w, h);
+                    captureAndSave(CARD_WIDTH, fCssH);
                 }
             });
         }
@@ -458,17 +467,16 @@ public class MainActivity extends Activity {
         captureW = Math.round(cssW * d);
         captureH = Math.round(cssH * d);
         log("final css=" + cssW + "x" + cssH + " dpr=" + d + " view=" + captureW + "x" + captureH);
-        ViewGroup.LayoutParams lp = captureView.getLayoutParams();
-        lp.width = captureW;
-        lp.height = captureH;
-        captureView.setLayoutParams(lp);
-        ViewGroup.LayoutParams hp = captureHost.getLayoutParams();
-        hp.width = captureW;
-        hp.height = captureH;
-        captureHost.setLayoutParams(hp);
-        captureView.requestLayout();
-        captureHost.requestLayout();
-        new Handler(Looper.getMainLooper()).postDelayed(this::drawScaledCapture, 700);
+        // 先按整卡宽度布局（让 CSS 宽度=1200），高度先取一块，避免创建超大视图
+        // 分块截图：按视口高度滚动，逐块绘制到最终位图
+        tileCssH = Math.max(300, Math.min(cssH, 900));
+        tileIndex = 0;
+        tileBitmap = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
+        tileCanvas = new Canvas(tileBitmap);
+        tileCanvas.drawColor(Color.WHITE);
+        log("tiling css=" + cssW + "x" + cssH + " tileCssH=" + tileCssH + " dpr=" + pageDpr);
+        resizeCapture(captureW, Math.round(tileCssH * (pageDpr > 1 ? pageDpr : viewDensity())));
+        new Handler(Looper.getMainLooper()).postDelayed(() -> captureTile(0), 500);
     }
 
     /** 优先用 PixelCopy 抓真实窗口像素（最接近系统截图），失败再退回 view.draw */
@@ -513,6 +521,63 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             log("pixelcopy exception " + t);
             drawCapture();
+        }
+    }
+
+    private void captureTile(final int index) {
+        if (captureView == null || tileBitmap == null) return;
+        final int offset = index * tileCssH;
+        if (offset >= cssH) {
+            finishTiles();
+            return;
+        }
+        captureView.evaluateJavascript("window.scrollTo(0," + offset + ")", null);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (captureView == null || tileBitmap == null) return;
+            try {
+                float d = pageDpr > 1 ? pageDpr : viewDensity();
+                tileCanvas.save();
+                tileCanvas.scale(1f / d, 1f / d);
+                tileCanvas.translate(0, -offset);
+                captureView.draw(tileCanvas);
+                tileCanvas.restore();
+                log("tile " + index + " offset=" + offset);
+            } catch (Throwable t) {
+                log("tile " + index + " failed " + t);
+            }
+            captureTile(index + 1);
+        }, 260);
+    }
+
+    private void finishTiles() {
+        Bitmap bmp = tileBitmap;
+        tileBitmap = null;
+        tileCanvas = null;
+        if (bmp == null) return;
+        try {
+            if (isBlank(bmp)) {
+                log("tiles blank");
+                bmp.recycle();
+                drawScaledCapture();
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            byte[] png = bos.toByteArray();
+            String name = "phi-card-" + System.currentTimeMillis() + ".png";
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
+                fos.write(png); fos.flush();
+            }
+            log("captured tiles css=" + cssW + "x" + cssH + " png=" + png.length);
+            dumpPreview(bmp, "tiles");
+            String result = writeToGallery(png, captureMode, name);
+            log("gallery: " + result);
+            finishCapture(withPreview(result, name));
+        } catch (Throwable t) {
+            log("finish tiles failed " + t);
+            finishCapture(failJson("截图失败：" + t.getMessage()));
+        } finally {
+            if (!bmp.isRecycled()) bmp.recycle();
         }
     }
 
@@ -619,6 +684,9 @@ public class MainActivity extends Activity {
     }
 
     private void destroyCapture() {
+        if (tileBitmap != null && !tileBitmap.isRecycled()) tileBitmap.recycle();
+        tileBitmap = null;
+        tileCanvas = null;
         captureMode = null;
         captureData = null;
         final FrameLayout host = captureHost;
