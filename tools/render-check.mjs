@@ -99,6 +99,20 @@ await browser.close();
 server.close();
 
 /* ---------- 5) 比对 ---------- */
+const compare = (name, fileA, fileB) => {
+  const pixelmatch = require('pixelmatch');
+  const { PNG } = require('pngjs');
+  const a = PNG.sync.read(fs.readFileSync(fileA));
+  const b = PNG.sync.read(fs.readFileSync(fileB));
+  if (a.width !== b.width || a.height !== b.height) {
+    return { name, identical: false, reason: 'size mismatch', refSize: [a.width, a.height], appSize: [b.width, b.height] };
+  }
+  const diff = new PNG({ width: a.width, height: a.height });
+  const n = pixelmatch(a.data, b.data, diff.data, a.width, a.height, { threshold: 0.1 });
+  fs.writeFileSync(path.join(OUT, `diff-${name}.png`), PNG.sync.write(diff));
+  return { name, identical: n === 0, diffPixels: n, totalPixels: a.width * a.height, ratio: Number(((n / (a.width * a.height)) * 100).toFixed(4)) };
+};
+
 let report = {
   size: { ref: refBox, app: appBox },
   baseline: null,
