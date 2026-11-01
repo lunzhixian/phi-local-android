@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
     private int captureW = CARD_WIDTH;
     private int captureH = 2000;
     private int captureTries = 0;
+    private final StringBuilder diag = new StringBuilder();
 
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
@@ -93,6 +94,18 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         webView.loadUrl("https://" + ASSET_HOST + "/index.html");
+
+        // 安装后首次启动跑一次自检，诊断结果写入 Download/DSHA/phi-diag.txt
+        android.content.SharedPreferences sp = getSharedPreferences("phi", MODE_PRIVATE);
+        if (!sp.getBoolean("selftest_v2", false)) {
+            sp.edit().putBoolean("selftest_v2", true).apply();
+            webView.postDelayed(() -> {
+                if (webView == null) return;
+                log("self-test start");
+                webView.evaluateJavascript(
+                        "window.__selfTest ? window.__selfTest() : 'no-selftest'", null);
+            }, 4000);
+        }
     }
 
     private void configure(WebSettings s) {
@@ -241,6 +254,35 @@ public class MainActivity extends Activity {
 
     /* ---------------- 离屏渲染（原版模板 → 位图） ---------------- */
 
+    private void log(String msg) {
+        android.util.Log.i("PhiCard", msg);
+        diag.append(System.currentTimeMillis() % 100000).append("ms ").append(msg).append('\n');
+    }
+
+    private void writeDiag() {
+        try {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, "phi-diag.txt");
+            v.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                v.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/DSHA");
+                v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            }
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) return;
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                os.write(diag.toString().getBytes("UTF-8"));
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                getContentResolver().update(uri, done, null, null);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("PhiCard", "diag write failed", e);
+        }
+    }
+
     private void startCapture(String dataJson, String mode, String callbackId) {
         destroyCapture();
         captureData = dataJson;
@@ -254,8 +296,11 @@ public class MainActivity extends Activity {
         cfg.fontScale = 1f;
         Context oneX = createConfigurationContext(cfg);
 
+        diag.append("=== render ").append(System.currentTimeMillis()).append(" mode=").append(mode).append(" ===\n");
+        log("data bytes=" + dataJson.length());
+
         captureHost = new FrameLayout(this);
-        captureHost.setBackgroundColor(Color.WHITE);
+        captureHost.setBackgroundColor(Color.parseColor("#F2070A12"));
 
         captureView = new WebView(oneX);
         captureView.setBackgroundColor(Color.WHITE);
@@ -265,24 +310,31 @@ public class MainActivity extends Activity {
         captureView.setWebViewClient(new AssetClient());
         captureHost.addView(captureView, new FrameLayout.LayoutParams(captureW, captureH));
 
-        // 必须 attach 到窗口才会真正绘制，所以放到屏幕外
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(captureW, captureH);
-        lp.leftMargin = -captureW - 200;
-        lp.topMargin = 0;
+        // 必须真正参与绘制：作为最上层、大小等于卡片，短暂覆盖在界面上
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         root.addView(captureHost, lp);
+        log("host added " + captureW + "x" + captureH);
 
         captureView.loadUrl("https://" + ASSET_HOST + "/plugin/render.html");
+        log("loading render.html");
     }
 
     private class CaptureBridge {
         @JavascriptInterface
         public void ready(int w, int h) {
-            runOnUiThread(() -> captureAndSave(Math.max(1, w), Math.max(1, h)));
+            runOnUiThread(() -> {
+                log("js ready " + w + "x" + h);
+                captureAndSave(Math.max(1, w), Math.max(1, h));
+            });
         }
 
         @JavascriptInterface
         public void fail(String msg) {
-            runOnUiThread(() -> finishCapture(failJson("模板渲染失败：" + msg)));
+            runOnUiThread(() -> {
+                log("js fail: " + msg);
+                finishCapture(failJson("模板渲染失败：" + msg));
+            });
         }
     }
 
@@ -300,7 +352,51 @@ public class MainActivity extends Activity {
         captureHost.setLayoutParams(hp);
         captureView.requestLayout();
         captureHost.requestLayout();
-        new Handler(Looper.getMainLooper()).postDelayed(this::drawCapture, 450);
+        new Handler(Looper.getMainLooper()).postDelayed(this::pixelCopyCapture, 600);
+    }
+
+    /** 优先用 PixelCopy 抓真实窗口像素（最接近系统截图），失败再退回 view.draw */
+    private void pixelCopyCapture() {
+        if (captureView == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            drawCapture();
+            return;
+        }
+        try {
+            final Bitmap bmp = Bitmap.createBitmap(captureW, captureH, Bitmap.Config.ARGB_8888);
+            int[] loc = new int[2];
+            captureView.getLocationInWindow(loc);
+            android.graphics.Rect rect = new android.graphics.Rect(loc[0], loc[1], loc[0] + captureW, loc[1] + captureH);
+            log("pixelcopy rect=" + rect.toShortString());
+            android.view.PixelCopy.request(getWindow(), rect, bmp, (copyResult) -> {
+                if (copyResult == android.view.PixelCopy.SUCCESS && !isBlank(bmp)) {
+                    try {
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+                        byte[] png = bos.toByteArray();
+                        String name = "phi-card-" + System.currentTimeMillis() + ".png";
+                        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
+                            fos.write(png); fos.flush();
+                        }
+                        log("pixelcopy ok " + captureW + "x" + captureH + " bytes=" + png.length);
+                        String result = writeToGallery(png, captureMode, name);
+                        log("gallery: " + result);
+                        finishCapture(withPreview(result, name));
+                    } catch (Throwable t) {
+                        log("pixelcopy save failed " + t);
+                        drawCapture();
+                    } finally {
+                        bmp.recycle();
+                    }
+                } else {
+                    log("pixelcopy fallback result=" + copyResult);
+                    bmp.recycle();
+                    drawCapture();
+                }
+            }, new Handler(Looper.getMainLooper()));
+        } catch (Throwable t) {
+            log("pixelcopy exception " + t);
+            drawCapture();
+        }
     }
 
     private void drawCapture() {
@@ -316,6 +412,7 @@ public class MainActivity extends Activity {
                 bmp.recycle();
                 bmp = null;
                 captureTries++;
+                log("blank capture, try " + captureTries);
                 if (captureTries <= 2) {
                     new Handler(Looper.getMainLooper()).postDelayed(this::drawCapture, 700);
                     return;
@@ -331,8 +428,12 @@ public class MainActivity extends Activity {
                 fos.write(png);
                 fos.flush();
             }
-            finishCapture(withPreview(writeToGallery(png, captureMode, name), name));
+            log("captured " + captureW + "x" + captureH + " bytes=" + png.length);
+            String result = writeToGallery(png, captureMode, name);
+            log("gallery: " + result);
+            finishCapture(withPreview(result, name));
         } catch (Throwable t) {
+            log("draw failed: " + t);
             finishCapture(failJson("截图失败：" + t.getMessage()));
         } finally {
             if (bmp != null && !bmp.isRecycled()) bmp.recycle();
@@ -352,6 +453,8 @@ public class MainActivity extends Activity {
     }
 
     private void finishCapture(String json) {
+        log("finish: " + (json != null && json.length() > 160 ? json.substring(0, 160) : json));
+        writeDiag();
         String cb = captureCallback;
         captureCallback = null;
         destroyCapture();

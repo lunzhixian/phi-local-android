@@ -652,5 +652,19 @@
     renderAll();
   }
 
+  /** 安装后自检：用示例数据跑一遍原版模板出图 */
+  window.__selfTest = async function () {
+    try {
+      demoMode();
+      await new Promise((r) => setTimeout(r, 300));
+      state.view = 'b19';
+      renderAll();
+      await saveCard(false);
+      return 'ok';
+    } catch (e) {
+      return 'err:' + (e && e.message);
+    }
+  };
+
   boot();
 })();
