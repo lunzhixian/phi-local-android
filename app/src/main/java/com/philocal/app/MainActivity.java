@@ -585,7 +585,7 @@ public class MainActivity extends Activity {
                 log("scaled draw blank, fallback pixelcopy");
                 bmp.recycle();
                 bmp = null;
-                pixelCopyCapture();
+                finishCapture(failJson("离屏渲染空白"));
                 return;
             }
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -604,7 +604,7 @@ public class MainActivity extends Activity {
             log("scaled draw failed: " + t);
             if (bmp != null && !bmp.isRecycled()) bmp.recycle();
             bmp = null;
-            pixelCopyCapture();
+            finishCapture(failJson("离屏渲染失败"));
         } finally {
             if (bmp != null && !bmp.isRecycled()) bmp.recycle();
         }
