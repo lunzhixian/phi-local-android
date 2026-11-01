@@ -388,7 +388,7 @@
       try {
         const data = await buildB19Data(state.computed);
         const res = await nativePromise('renderCard', JSON.stringify(data), mode);
-        showPreview(res && res.preview);
+        showPreview(res && res.preview, res && res.meta);
         toast(share ? '已打开分享' : '已保存到相册 Pictures/PhiLocal');
         return res;
       } catch (e) {
@@ -419,8 +419,10 @@
     }
   }
 
-  function showPreview(url) {
+  function showPreview(url, meta) {
     if (!url) return;
+    const m = document.getElementById('cardPreviewMeta');
+    if (m) m.textContent = meta || '';
     const box = document.getElementById('cardPreview');
     const img = document.getElementById('cardPreviewImg');
     if (!box || !img) return;

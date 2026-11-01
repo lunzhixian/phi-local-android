@@ -64,6 +64,10 @@ public class MainActivity extends Activity {
     private String captureData;
 
     private int cardCssH = 1200;
+    private int cardCssW = CARD_CSS_W;
+    private float lastScale = 1f;
+    private int tileCount = 0;
+    private String captureMeta = "";
     private int viewWidthPx = 0;
     private int viewHeightPx = 0;
     private float zoom = 0.32f;
@@ -323,7 +327,8 @@ public class MainActivity extends Activity {
         captureView = new WebView(this);
         captureView.setBackgroundColor(Color.WHITE);
         configure(captureView.getSettings());
-        captureView.setInitialScale(percent);
+        captureView.getSettings().setUseWideViewPort(true);
+        captureView.getSettings().setLoadWithOverviewMode(true);
         captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
         captureView.setWebViewClient(new AssetClient() {
             @Override
@@ -349,6 +354,7 @@ public class MainActivity extends Activity {
                 log("page info " + info + " css=" + w + "x" + h);
                 cardCssH = Math.max(1, h);
                 int cssW = w > 0 ? w : CARD_CSS_W;
+                cardCssW = cssW;
                 float physPerCss = viewWidthPx / (float) cssW;
                 tileCssH = Math.max(200, (int) (viewHeightPx / Math.max(0.2f, physPerCss)));
                 log("physPerCss=" + physPerCss + " tileCssH=" + tileCssH);
@@ -393,6 +399,8 @@ public class MainActivity extends Activity {
                 PixelCopy.request(getWindow(), rect, tile, result -> {
                     if (result == PixelCopy.SUCCESS) {
                         float k = outBitmap.getWidth() / (float) viewWidthPx;
+                        lastScale = k;
+                        tileCount = index + 1;
                         outCanvas.save();
                         outCanvas.translate(0, offsetCss);
                         outCanvas.scale(k, k);
@@ -512,7 +520,12 @@ public class MainActivity extends Activity {
     private String withPreview(String json, String name) {
         try {
             JSONObject o = new JSONObject(json);
-            if (o.optBoolean("ok")) o.put("preview", "https://" + ASSET_HOST + "/card/" + name);
+            if (o.optBoolean("ok")) {
+                o.put("preview", "https://" + ASSET_HOST + "/card/" + name);
+                o.put("meta", "view=" + viewWidthPx + "x" + viewHeightPx
+                        + " css=" + cardCssW + "x" + cardCssH
+                        + " k=" + lastScale + " zoom=" + zoom + " tiles=" + tileCount);
+            }
             return o.toString();
         } catch (Exception e) {
             return json;

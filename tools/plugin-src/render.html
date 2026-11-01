@@ -16,6 +16,9 @@
     try {
       var data = JSON.parse(json);
       var html = window.__B19_TPL(data);
+      // 固定 1200 CSS px 版心，交给 WebView 的 overview 模式自动铺满屏宽
+      html = html.replace(/<meta\s+name=["']viewport["'][^>]*>/i,
+        '<meta name="viewport" content="width=1200, user-scalable=no">');
       document.open();
       document.write(html);
       document.close();
