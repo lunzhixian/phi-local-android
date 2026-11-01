@@ -3,12 +3,11 @@ package com.philocal.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
-import android.content.Context;
 import android.content.Intent;
-import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -16,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
@@ -33,49 +33,50 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
 
+/**
+ * 单 Activity + WebView 壳。
+ *
+ * 成绩图：用 setInitialScale 把「1200 CSS px 宽的卡片」正好缩放到屏幕物理宽度，
+ * 于是排版宽度就是 1200 CSS px，整张卡片按真实像素绘制在屏幕上；
+ * 再用 PixelCopy 抓窗口像素（不是 View.draw），按物理宽度缩放到 1200px 后纵向拼接。
+ */
 public class MainActivity extends Activity {
 
     private static final String ASSET_HOST = "appassets.local";
-    private static final int CARD_WIDTH = 1200;
+    private static final int CARD_CSS_W = 1200;
 
     private FrameLayout root;
     private WebView webView;
     private boolean loadedFallback = false;
 
-    /** 离屏渲染状态 */
+    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+
     private FrameLayout captureHost;
     private WebView captureView;
     private String captureCallback;
     private String captureMode;
     private String captureData;
-    private int captureW = CARD_WIDTH;
-    private int captureH = 1200;
-    private float pageDpr = 1f;
-    private int tileCssH = 900;
-    private int tileIndex = 0;
-    private Bitmap tileBitmap;
-    private Canvas tileCanvas;
-    private int cssW = CARD_WIDTH;
-    private int cssH = 1200;
-    private int captureTries = 0;
-    private final StringBuilder diag = new StringBuilder();
 
-    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+    private int cardCssH = 1200;
+    private int viewWidthPx = 0;
+    private int viewHeightPx = 0;
+    private float zoom = 0.32f;
+    private int tileCssH = 1000;
+    private Bitmap outBitmap;
+    private Canvas outCanvas;
+
+    private final StringBuilder diag = new StringBuilder();
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 整页绘制：让 WebView.draw() 抓到完整文档，而不是仅可视区域
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            WebView.enableSlowWholeDocumentDraw();
-        }
-
         getWindow().setStatusBarColor(Color.parseColor("#07090f"));
         getWindow().setNavigationBarColor(Color.parseColor("#07090f"));
 
@@ -102,15 +103,13 @@ public class MainActivity extends Activity {
 
         webView.loadUrl("https://" + ASSET_HOST + "/index.html");
 
-        // 安装后首次启动跑一次自检，诊断结果写入 Download/DSHA/phi-diag.txt
         android.content.SharedPreferences sp = getSharedPreferences("phi", MODE_PRIVATE);
-        if (!sp.getBoolean("selftest_v2", false)) {
-            sp.edit().putBoolean("selftest_v2", true).apply();
+        if (!sp.getBoolean("selftest_v4", false)) {
+            sp.edit().putBoolean("selftest_v4", true).apply();
             webView.postDelayed(() -> {
                 if (webView == null) return;
                 log("self-test start");
-                webView.evaluateJavascript(
-                        "window.__selfTest ? window.__selfTest() : 'no-selftest'", null);
+                webView.evaluateJavascript("window.__selfTest ? window.__selfTest() : 'no-selftest'", null);
             }, 4000);
         }
     }
@@ -131,13 +130,6 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
     }
 
-    private java.io.File cardDir() {
-        java.io.File dir = new java.io.File(getCacheDir(), "cards");
-        if (!dir.exists()) dir.mkdirs();
-        return dir;
-    }
-
-    /** 把 https://appassets.local/* 映射到 assets/www/* */
     private class AssetClient extends WebViewClient {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -155,19 +147,21 @@ public class MainActivity extends Activity {
                     java.io.File f = new java.io.File(cardDir(), path.substring("/card/".length()));
                     return new WebResourceResponse("image/png", null, new java.io.FileInputStream(f));
                 } catch (Exception e) {
-                    return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
-                            new java.util.HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
+                    return notFound();
                 }
             }
             String assetPath = "www" + path;
             try {
-                InputStream in = getAssets().open(assetPath);
-                return new WebResourceResponse(mimeOf(assetPath), "UTF-8", in);
+                return new WebResourceResponse(mimeOf(assetPath), "UTF-8", getAssets().open(assetPath));
             } catch (Exception e) {
-                return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
-                        new java.util.HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
+                return notFound();
             }
         }
+    }
+
+    private WebResourceResponse notFound() {
+        return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
+                new HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
     }
 
     private String mimeOf(String path) {
@@ -184,6 +178,12 @@ public class MainActivity extends Activity {
         if (path.endsWith(".woff")) return "font/woff";
         if (path.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
+    }
+
+    private java.io.File cardDir() {
+        java.io.File dir = new java.io.File(getCacheDir(), "cards");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
     }
 
     @Override
@@ -205,7 +205,49 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    /* ---------------- JS 桥 ---------------- */
+    private void log(String msg) {
+        android.util.Log.i("PhiCard", msg);
+        diag.append(System.currentTimeMillis() % 100000).append("ms ").append(msg).append('\n');
+    }
+
+    private void flushDiag() {
+        try {
+            java.io.File ext = getExternalFilesDir(null);
+            if (ext != null) {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(ext, "phi-diag.txt"))) {
+                    fos.write(diag.toString().getBytes("UTF-8"));
+                }
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void dumpPreview(Bitmap src, String tag) {
+        try {
+            int w = 240;
+            int h = Math.max(1, Math.round(w * (float) src.getHeight() / src.getWidth()));
+            Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
+            ByteArrayOutputStream jb = new ByteArrayOutputStream();
+            small.compress(Bitmap.CompressFormat.JPEG, 72, jb);
+            small.recycle();
+            String b64 = Base64.encodeToString(jb.toByteArray(), Base64.NO_WRAP);
+            StringBuilder sb = new StringBuilder();
+            sb.append("tag=").append(tag).append('\n');
+            sb.append("src=").append(src.getWidth()).append('x').append(src.getHeight()).append('\n');
+            sb.append("size=").append(b64.length()).append('\n');
+            for (int i = 0; i < b64.length(); i += 76) {
+                sb.append(b64, i, Math.min(b64.length(), i + 76)).append('\n');
+            }
+            java.io.File ext = getExternalFilesDir(null);
+            if (ext != null) {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(ext, "phi-preview.b64.txt"))) {
+                    fos.write(sb.toString().getBytes("UTF-8"));
+                }
+            }
+            log("preview dumped " + w + "x" + h + " b64=" + b64.length());
+        } catch (Throwable t) {
+            log("preview dump failed " + t);
+        }
+    }
 
     private void resolve(String callbackId, String json) {
         final String js = "window.__nativeResolve(" + JSONObject.quote(callbackId) + "," + JSONObject.quote(json) + ");";
@@ -240,12 +282,12 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void saveImage(String base64, String name, String callbackId) {
-            pool.execute(() -> resolveImage(callbackId, saveImageFromBase64(base64, name, false)));
+            pool.execute(() -> resolveImage(callbackId, saveBase64(base64, name, false)));
         }
 
         @JavascriptInterface
         public void shareImage(String base64, String name, String callbackId) {
-            pool.execute(() -> resolveImage(callbackId, saveImageFromBase64(base64, name, true)));
+            pool.execute(() -> resolveImage(callbackId, saveBase64(base64, name, true)));
         }
 
         @JavascriptInterface
@@ -255,73 +297,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String appVersion() {
-            return "1.2.3";
-        }
-    }
-
-    /* ---------------- 离屏渲染（原版模板 → 位图） ---------------- */
-
-    private void log(String msg) {
-        android.util.Log.i("PhiCard", msg);
-        diag.append(System.currentTimeMillis() % 100000).append("ms ").append(msg).append('\n');
-    }
-
-    /** 把成图缩成 240px 宽的 JPEG，base64 写进文本文件，方便 adb 侧直接查看 */
-    private void dumpPreview(Bitmap src, String tag) {
-        try {
-            int w = 240;
-            int h = Math.max(1, Math.round(w * (float) src.getHeight() / src.getWidth()));
-            Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
-            ByteArrayOutputStream jb = new ByteArrayOutputStream();
-            small.compress(Bitmap.CompressFormat.JPEG, 72, jb);
-            small.recycle();
-            String b64 = Base64.encodeToString(jb.toByteArray(), Base64.NO_WRAP);
-            String text = "tag=" + tag + "\nsrc=" + src.getWidth() + "x" + src.getHeight()
-                    + "\nsize=" + b64.length() + "\n" + b64 + "\n";
-            java.io.File ext = getExternalFilesDir(null);
-            if (ext != null) {
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(ext, "phi-preview.b64.txt"))) {
-                    fos.write(text.getBytes("UTF-8"));
-                }
-            }
-            log("preview dumped " + w + "x" + h + " b64=" + b64.length());
-        } catch (Throwable t) {
-            log("preview dump failed " + t);
-        }
-    }
-
-    private void writeDiag() {
-        try {
-            java.io.File ext = getExternalFilesDir(null);
-            if (ext != null) {
-                java.io.File f = new java.io.File(ext, "phi-diag.txt");
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
-                    fos.write(diag.toString().getBytes("UTF-8"));
-                }
-            }
-        } catch (Exception e) {
-            android.util.Log.e("PhiCard", "ext diag failed", e);
-        }
-        try {
-            ContentValues v = new ContentValues();
-            v.put(MediaStore.MediaColumns.DISPLAY_NAME, "phi-diag.txt");
-            v.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                v.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/DSHA");
-                v.put(MediaStore.MediaColumns.IS_PENDING, 1);
-            }
-            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
-            if (uri == null) return;
-            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
-                os.write(diag.toString().getBytes("UTF-8"));
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContentValues done = new ContentValues();
-                done.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                getContentResolver().update(uri, done, null, null);
-            }
-        } catch (Exception e) {
-            android.util.Log.e("PhiCard", "diag write failed", e);
+            return "1.5.0";
         }
     }
 
@@ -330,311 +306,143 @@ public class MainActivity extends Activity {
         captureData = dataJson;
         captureMode = mode;
         captureCallback = callbackId;
-        captureTries = 0;
 
-        // 用系统真实密度：WebView 的 devicePixelRatio 取的是屏幕密度，
-        // 伪造 1x 上下文只会让“排版 1:1、绘制 3.75x”，结果就是只剩左上角一块。
-        float d0 = Math.max(1f, getResources().getDisplayMetrics().density);
-        int initW = Math.round(CARD_WIDTH * d0);
-        int initH = Math.round(1200 * d0);
-        diag.append("=== render ").append(System.currentTimeMillis()).append(" mode=").append(mode).append(" ===\n");
-        log("data bytes=" + dataJson.length());
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        float density = Math.max(1f, dm.density);
+        viewWidthPx = root.getWidth() > 0 ? root.getWidth() : dm.widthPixels;
+        viewHeightPx = root.getHeight() > 0 ? root.getHeight() : dm.heightPixels;
+
+        zoom = viewWidthPx / ((float) CARD_CSS_W * density);
+        int percent = Math.max(10, Math.round(zoom * 100));
+        log("start view=" + viewWidthPx + "x" + viewHeightPx + " density=" + density
+                + " zoom=" + zoom + " initialScale=" + percent);
 
         captureHost = new FrameLayout(this);
-        captureHost.setBackgroundColor(Color.parseColor("#F2070A12"));
+        captureHost.setBackgroundColor(Color.WHITE);
 
         captureView = new WebView(this);
         captureView.setBackgroundColor(Color.WHITE);
-
         configure(captureView.getSettings());
+        captureView.getSettings().setInitialScale(percent);
         captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
         captureView.setWebViewClient(new AssetClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                log("page finished: " + url);
+                log("page finished");
                 try {
                     view.evaluateJavascript("window.__render(" + JSONObject.quote(captureData) + ")", null);
                 } catch (Throwable t) {
-                    log("evaluate failed: " + t);
+                    log("evaluate failed " + t);
                 }
             }
         });
-        captureW = initW;
-        captureH = initH;
-        captureHost.addView(captureView, new FrameLayout.LayoutParams(initW, initH));
-
-        // 必须真正参与绘制：作为最上层、大小等于卡片，短暂覆盖在界面上
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        root.addView(captureHost, lp);
-        log("host added " + initW + "x" + initH + " density=" + d0 + " dprFromPage=" + 0);
-
+        captureHost.addView(captureView, new FrameLayout.LayoutParams(viewWidthPx, viewHeightPx));
+        root.addView(captureHost, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         captureView.loadUrl("https://" + ASSET_HOST + "/plugin/render.html");
-        log("loading render.html");
     }
 
     private class CaptureBridge {
         @JavascriptInterface
         public void readyInfo(int w, int h, String info) {
             runOnUiThread(() -> {
-                log("page info " + info);
-                float d = viewDensity();
-                try {
-                    JSONObject o = new JSONObject(info);
-                    float pd = (float) o.optDouble("dpr", d);
-                    if (pd > 1f) d = pd;
-                } catch (Exception ignored) { }
-                pageDpr = d;
-
-                // 1) 把视口调成一块：CSS 宽 1200，高 = 一块
-                tileCssH = 700;
-                int viewW = Math.round(CARD_WIDTH * d);
-                int viewH = Math.round(tileCssH * d);
-                resizeCapture(viewW, viewH);
-
-                // 2) 重新量一次真实内容高度
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    if (captureView == null) return;
-                    captureView.evaluateJavascript("window.scrollTo(0,0); window.__measure ? window.__measure() : null",
-                            value -> {
-                                int mw = CARD_WIDTH, mh = h;
-                                try {
-                                    String json = unquote(value);
-                                    JSONObject m = new JSONObject(json);
-                                    mw = m.optInt("w", CARD_WIDTH);
-                                    mh = m.optInt("h", h);
-                                } catch (Exception ex) {
-                                    log("measure parse failed " + ex + " raw=" + value);
-                                }
-                                log("measure css=" + mw + "x" + mh + " dpr=" + pageDpr);
-                                beginTiles(Math.max(600, Math.min(mw, 2000)), Math.max(1, mh));
-                            });
-                }, 500);
+                log("page info " + info + " css=" + w + "x" + h);
+                cardCssH = Math.max(1, h);
+                int cssW = w > 0 ? w : CARD_CSS_W;
+                float physPerCss = viewWidthPx / (float) cssW;
+                tileCssH = Math.max(200, (int) (viewHeightPx / Math.max(0.2f, physPerCss)));
+                log("physPerCss=" + physPerCss + " tileCssH=" + tileCssH);
+                outBitmap = Bitmap.createBitmap(cssW, cardCssH, Bitmap.Config.ARGB_8888);
+                outCanvas = new Canvas(outBitmap);
+                outCanvas.drawColor(Color.WHITE);
+                captureTilePhys(0);
             });
         }
 
         @JavascriptInterface
         public void ready(int w, int h) {
-            runOnUiThread(() -> {
-                log("js ready " + w + "x" + h);
-                pageDpr = viewDensity();
-                tileCssH = 700;
-                resizeCapture(Math.round(CARD_WIDTH * pageDpr), Math.round(tileCssH * pageDpr));
-                new Handler(Looper.getMainLooper()).postDelayed(
-                        () -> beginTiles(Math.max(600, Math.min(w, 2000)), Math.max(1, h)), 400);
-            });
+            readyInfo(w, h, "{}");
         }
 
         @JavascriptInterface
         public void fail(String msg) {
             runOnUiThread(() -> {
-                log("js fail: " + msg);
+                log("js fail " + msg);
                 finishCapture(failJson("模板渲染失败：" + msg));
             });
         }
     }
 
-    private void resizeCapture(int w, int h) {
-        if (captureView == null) return;
-        captureW = Math.max(200, w);
-        captureH = Math.max(200, h);
-        ViewGroup.LayoutParams lp = captureView.getLayoutParams();
-        lp.width = captureW;
-        lp.height = captureH;
-        captureView.setLayoutParams(lp);
-        captureView.requestLayout();
-        log("resize view " + captureW + "x" + captureH);
-    }
-
-    private float viewDensity() {
-        try {
-            return Math.max(1f, captureView.getResources().getDisplayMetrics().density);
-        } catch (Exception e) {
-            return Math.max(1f, getResources().getDisplayMetrics().density);
-        }
-    }
-
-    private String unquote(String value) {
-        if (value == null) return "";
-        String v = value;
-        if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
-            v = v.substring(1, v.length() - 1).replace("\\\"", "\"").replace("\\\\", "\\");
-        }
-        return v;
-    }
-
-    /** 分块截图：滚动 → PixelCopy 抓真实窗口像素 → 缩放拼进最终位图 */
-    private void captureTile(final int index) {
-        if (captureView == null || tileBitmap == null) return;
-        final int offset = index * tileCssH;
-        if (offset >= cssH) {
-            finishTiles();
+    private void captureTilePhys(final int index) {
+        if (captureView == null || outBitmap == null) return;
+        final int offsetCss = index * tileCssH;
+        if (offsetCss >= cardCssH) {
+            finishCaptureImage();
             return;
         }
-        captureView.evaluateJavascript("window.scrollTo(0," + offset + ")", null);
+        captureView.evaluateJavascript("window.scrollTo(0," + offsetCss + ")", null);
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (captureView == null || tileBitmap == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                drawTileDirect(index, offset);
+            if (captureView == null || outBitmap == null) return;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                drawTileFallback(index, offsetCss);
                 return;
             }
-            int[] loc = new int[2];
-            captureView.getLocationInWindow(loc);
-            int vw = Math.round(captureView.getWidth() * captureView.getScaleX());
-            int vh = Math.round(captureView.getHeight() * captureView.getScaleY());
             try {
-                final Bitmap tile = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
-                android.graphics.Rect rect = new android.graphics.Rect(loc[0], loc[1], loc[0] + vw, loc[1] + vh);
-                android.view.PixelCopy.request(getWindow(), rect, tile, (result) -> {
-                    if (result == android.view.PixelCopy.SUCCESS) {
-                        tileCanvas.save();
-                        tileCanvas.translate(0, offset);
-                        tileCanvas.drawBitmap(tile, 0, 0, null);
-                        tileCanvas.restore();
-                        log("tile " + index + " pixelcopy ok offset=" + offset);
+                final Bitmap tile = Bitmap.createBitmap(viewWidthPx, viewHeightPx, Bitmap.Config.ARGB_8888);
+                Rect rect = new Rect(0, 0, viewWidthPx, viewHeightPx);
+                PixelCopy.request(getWindow(), rect, tile, result -> {
+                    if (result == PixelCopy.SUCCESS) {
+                        float k = outBitmap.getWidth() / (float) viewWidthPx;
+                        outCanvas.save();
+                        outCanvas.translate(0, offsetCss);
+                        outCanvas.scale(k, k);
+                        outCanvas.drawBitmap(tile, 0, 0, null);
+                        outCanvas.restore();
+                        log("tile " + index + " offset=" + offsetCss + " k=" + k);
                         tile.recycle();
                     } else {
-                        log("tile " + index + " pixelcopy failed " + result);
+                        log("tile " + index + " pixelcopy fail " + result);
                         tile.recycle();
-                        drawTileDirect(index, offset);
+                        drawTileFallback(index, offsetCss);
                         return;
                     }
-                    captureTile(index + 1);
+                    captureTilePhys(index + 1);
                 }, new Handler(Looper.getMainLooper()));
             } catch (Throwable t) {
                 log("tile " + index + " exception " + t);
-                drawTileDirect(index, offset);
+                drawTileFallback(index, offsetCss);
             }
-        }, 320);
+        }, 340);
     }
 
-    private void drawTileDirect(int index, int offset) {
-        if (captureView == null || tileBitmap == null) return;
+    private void drawTileFallback(int index, int offsetCss) {
+        if (captureView == null || outBitmap == null) return;
+        log("tile " + index + " fallback view.draw");
         try {
-            float d = pageDpr > 1 ? pageDpr : viewDensity();
-            tileCanvas.save();
-            tileCanvas.scale(1f / d, 1f / d);
-            tileCanvas.translate(0, offset);
-            captureView.draw(tileCanvas);
-            tileCanvas.restore();
-            log("tile " + index + " draw direct offset=" + offset);
+            float k = outBitmap.getWidth() / (float) viewWidthPx;
+            outCanvas.save();
+            outCanvas.translate(0, offsetCss);
+            outCanvas.scale(k, k);
+            captureView.draw(outCanvas);
+            outCanvas.restore();
         } catch (Throwable t) {
-            log("tile " + index + " draw direct failed " + t);
+            log("fallback draw failed " + t);
         }
-        captureTile(index + 1);
+        captureTilePhys(index + 1);
     }
 
-    private void finishTiles() {
-        Bitmap bmp = tileBitmap;
-        tileBitmap = null;
-        tileCanvas = null;
-        if (bmp == null) { finishCapture(failJson("截图为空")); return; }
+    private void finishCaptureImage() {
+        Bitmap bmp = outBitmap;
+        outBitmap = null;
+        outCanvas = null;
+        if (bmp == null) {
+            finishCapture(failJson("截图为空"));
+            return;
+        }
         try {
             if (isBlank(bmp)) {
-                log("tiles blank");
-                bmp.recycle();
+                log("image blank");
                 finishCapture(failJson("截图空白"));
-                return;
-            }
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-            byte[] png = bos.toByteArray();
-            String name = "phi-card-" + System.currentTimeMillis() + ".png";
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
-                fos.write(png); fos.flush();
-            }
-            log("captured tiles css=" + cssW + "x" + cssH + " png=" + png.length);
-            dumpPreview(bmp, "tiles");
-            String result = writeToGallery(png, captureMode, name);
-            log("gallery: " + result);
-            finishCapture(withPreview(result, name));
-        } catch (Throwable t) {
-            log("finish tiles failed " + t);
-            finishCapture(failJson("截图失败：" + t.getMessage()));
-        } finally {
-            if (!bmp.isRecycled()) bmp.recycle();
-        }
-    }
-
-    private void beginTiles(int w, int h) {
-        if (captureView == null || captureHost == null) return;
-        cssW = w;
-        cssH = h;
-        float d = pageDpr > 1 ? pageDpr : viewDensity();
-        log("begin tiles css=" + cssW + "x" + cssH + " dpr=" + d);
-        int viewW = Math.round(cssW * d);
-        int viewH = Math.round(tileCssH * d);
-        resizeCapture(viewW, viewH);
-        captureView.setPivotX(0f);
-        captureView.setPivotY(0f);
-        captureView.setScaleX(1f / d);
-        captureView.setScaleY(1f / d);
-        log("tile view " + viewW + "x" + viewH + " scaled to " + cssW + "x" + tileCssH);
-        if (tileBitmap != null && !tileBitmap.isRecycled()) tileBitmap.recycle();
-        tileBitmap = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
-        tileCanvas = new Canvas(tileBitmap);
-        tileCanvas.drawColor(Color.WHITE);
-        captureTile(0);
-    }
-
-    /** 按 CSS 尺寸输出：view 按设备密度布局，画布缩放 1/density */
-    private void drawScaledCapture() {
-        if (captureView == null) return;
-        Bitmap bmp = null;
-        try {
-            float d = pageDpr > 1 ? pageDpr : viewDensity();
-            bmp = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(bmp);
-            canvas.drawColor(Color.WHITE);
-            canvas.scale(1f / d, 1f / d);
-            captureView.draw(canvas);
-            if (isBlank(bmp)) {
-                log("scaled draw blank, fallback pixelcopy");
-                bmp.recycle();
-                bmp = null;
-                finishCapture(failJson("离屏渲染空白"));
-                return;
-            }
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-            byte[] png = bos.toByteArray();
-            String name = "phi-card-" + System.currentTimeMillis() + ".png";
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
-                fos.write(png); fos.flush();
-            }
-            log("captured css=" + cssW + "x" + cssH + " png=" + png.length);
-            dumpPreview(bmp, "scaled");
-            String result = writeToGallery(png, captureMode, name);
-            log("gallery: " + result);
-            finishCapture(withPreview(result, name));
-        } catch (Throwable t) {
-            log("scaled draw failed: " + t);
-            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
-            bmp = null;
-            finishCapture(failJson("离屏渲染失败"));
-        } finally {
-            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
-        }
-    }
-
-    private void drawCapture() {
-        if (captureView == null) return;
-        Bitmap bmp = null;
-        try {
-            bmp = Bitmap.createBitmap(captureW, captureH, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(bmp);
-            canvas.drawColor(Color.WHITE);
-            captureView.draw(canvas);
-
-            if (isBlank(bmp)) {
-                bmp.recycle();
-                bmp = null;
-                captureTries++;
-                log("blank capture, try " + captureTries);
-                if (captureTries <= 2) {
-                    new Handler(Looper.getMainLooper()).postDelayed(this::drawCapture, 700);
-                    return;
-                }
-                finishCapture(failJson("离屏渲染无内容"));
                 return;
             }
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -645,15 +453,16 @@ public class MainActivity extends Activity {
                 fos.write(png);
                 fos.flush();
             }
-            log("captured " + captureW + "x" + captureH + " bytes=" + png.length);
+            log("captured " + bmp.getWidth() + "x" + bmp.getHeight() + " png=" + png.length);
+            dumpPreview(bmp, "final");
             String result = writeToGallery(png, captureMode, name);
-            log("gallery: " + result);
+            log("gallery " + result);
             finishCapture(withPreview(result, name));
         } catch (Throwable t) {
-            log("draw failed: " + t);
-            finishCapture(failJson("截图失败：" + t.getMessage()));
+            log("finish image failed " + t);
+            finishCapture(failJson("保存失败：" + t.getMessage()));
         } finally {
-            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
+            if (!bmp.isRecycled()) bmp.recycle();
         }
     }
 
@@ -670,8 +479,8 @@ public class MainActivity extends Activity {
     }
 
     private void finishCapture(String json) {
-        log("finish: " + (json != null && json.length() > 160 ? json.substring(0, 160) : json));
-        writeDiag();
+        log("finish " + (json != null && json.length() > 120 ? json.substring(0, 120) : json));
+        flushDiag();
         String cb = captureCallback;
         captureCallback = null;
         destroyCapture();
@@ -679,9 +488,9 @@ public class MainActivity extends Activity {
     }
 
     private void destroyCapture() {
-        if (tileBitmap != null && !tileBitmap.isRecycled()) tileBitmap.recycle();
-        tileBitmap = null;
-        tileCanvas = null;
+        if (outBitmap != null && !outBitmap.isRecycled()) outBitmap.recycle();
+        outBitmap = null;
+        outCanvas = null;
         captureMode = null;
         captureData = null;
         final FrameLayout host = captureHost;
@@ -700,9 +509,28 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ---------------- 图片落地 ---------------- */
+    private String withPreview(String json, String name) {
+        try {
+            JSONObject o = new JSONObject(json);
+            if (o.optBoolean("ok")) o.put("preview", "https://" + ASSET_HOST + "/card/" + name);
+            return o.toString();
+        } catch (Exception e) {
+            return json;
+        }
+    }
 
-    private String saveImageFromBase64(String base64, String name, boolean share) {
+    private String failJson(String msg) {
+        try {
+            JSONObject out = new JSONObject();
+            out.put("ok", false);
+            out.put("error", msg);
+            return out.toString();
+        } catch (Exception e) {
+            return "{\"ok\":false}";
+        }
+    }
+
+    private String saveBase64(String base64, String name, boolean share) {
         try {
             int comma = base64.indexOf(',');
             String pure = comma >= 0 ? base64.substring(comma + 1) : base64;
@@ -751,29 +579,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String withPreview(String json, String name) {
-        try {
-            JSONObject o = new JSONObject(json);
-            if (o.optBoolean("ok")) o.put("preview", "https://" + ASSET_HOST + "/card/" + name);
-            return o.toString();
-        } catch (Exception e) {
-            return json;
-        }
-    }
-
-    private String failJson(String msg) {
-        try {
-            JSONObject out = new JSONObject();
-            out.put("ok", false);
-            out.put("error", msg);
-            return out.toString();
-        } catch (Exception e) {
-            return "{\"ok\":false}";
-        }
-    }
-
-    /* ---------------- 网络 ---------------- */
-
     private String fetch(String url, String headersJson, boolean base64) {
         HttpURLConnection conn = null;
         try {
@@ -804,8 +609,7 @@ public class MainActivity extends Activity {
             JSONObject out = new JSONObject();
             out.put("ok", status >= 200 && status < 300);
             out.put("status", status);
-            out.put("body", base64 ? Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    : new String(bytes, "UTF-8"));
+            out.put("body", base64 ? Base64.encodeToString(bytes, Base64.NO_WRAP) : new String(bytes, "UTF-8"));
             return out.toString();
         } catch (Exception e) {
             try {
