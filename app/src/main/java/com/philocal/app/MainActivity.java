@@ -479,16 +479,14 @@ public class MainActivity extends Activity {
             }
             int[] loc = new int[2];
             captureView.getLocationInWindow(loc);
-            int vw = Math.min(captureView.getWidth(), Math.round(cssW * pageDpr));
-            int vh = captureView.getHeight();
+            int vw = Math.round(captureView.getWidth() * captureView.getScaleX());
+            int vh = Math.round(captureView.getHeight() * captureView.getScaleY());
             try {
                 final Bitmap tile = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
                 android.graphics.Rect rect = new android.graphics.Rect(loc[0], loc[1], loc[0] + vw, loc[1] + vh);
                 android.view.PixelCopy.request(getWindow(), rect, tile, (result) -> {
                     if (result == android.view.PixelCopy.SUCCESS) {
-                        float d = pageDpr > 1 ? pageDpr : viewDensity();
                         tileCanvas.save();
-                        tileCanvas.scale(1f / d, 1f / d);
                         tileCanvas.translate(0, offset);
                         tileCanvas.drawBitmap(tile, 0, 0, null);
                         tileCanvas.restore();
@@ -563,6 +561,14 @@ public class MainActivity extends Activity {
         cssH = h;
         float d = pageDpr > 1 ? pageDpr : viewDensity();
         log("begin tiles css=" + cssW + "x" + cssH + " dpr=" + d);
+        int viewW = Math.round(cssW * d);
+        int viewH = Math.round(tileCssH * d);
+        resizeCapture(viewW, viewH);
+        captureView.setPivotX(0f);
+        captureView.setPivotY(0f);
+        captureView.setScaleX(1f / d);
+        captureView.setScaleY(1f / d);
+        log("tile view " + viewW + "x" + viewH + " scaled to " + cssW + "x" + tileCssH);
         if (tileBitmap != null && !tileBitmap.isRecycled()) tileBitmap.recycle();
         tileBitmap = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
         tileCanvas = new Canvas(tileBitmap);
