@@ -31,6 +31,15 @@
     finish();
   };
 
+  window.__measure = function () {
+    var b = document.body.getBoundingClientRect();
+    return JSON.stringify({
+      iw: window.innerWidth, ih: window.innerHeight, dpr: window.devicePixelRatio,
+      w: Math.ceil(Math.max(b.width, document.body.scrollWidth, 1200)),
+      h: Math.ceil(Math.max(b.height, document.body.scrollHeight))
+    });
+  };
+
   function finish() {
     var imgs = Array.prototype.slice.call(document.images);
     var waits = imgs.map(function (im) {

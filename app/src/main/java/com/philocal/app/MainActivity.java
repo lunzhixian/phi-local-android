@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
     private String captureData;
     private int captureW = CARD_WIDTH;
     private int captureH = 1200;
+    private float pageDpr = 1f;
     private int cssW = CARD_WIDTH;
     private int cssH = 1200;
     private int captureTries = 0;
@@ -348,7 +349,43 @@ public class MainActivity extends Activity {
         public void readyInfo(int w, int h, String info) {
             runOnUiThread(() -> {
                 log("page info " + info);
-                captureAndSave(Math.max(1, w), Math.max(1, h));
+                try {
+                    JSONObject o = new JSONObject(info);
+                    int iw = o.optInt("iw", captureW);
+                    pageDpr = iw > 0 ? Math.max(1f, (float) captureW / iw) : viewDensity();
+                } catch (Exception e) {
+                    pageDpr = viewDensity();
+                }
+                log("dpr=" + pageDpr + " viewW was " + captureW);
+                // 目标：让页面 CSS 宽度 = 1200，再按 dpr 放大视图
+                int wantW = Math.round(CARD_WIDTH * pageDpr);
+                if (Math.abs(wantW - captureW) > 2) {
+                    resizeCapture(wantW, Math.round(Math.max(h, 200) * pageDpr));
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                        if (captureView == null) return;
+                        captureView.evaluateJavascript(
+                                "window.__measure ? window.__measure() : null",
+                                value -> {
+                                    if (value == null) { captureAndSave(w, h); return; }
+                                    try {
+                                        String json = value;
+                                        if (json.startsWith("\"") && json.endsWith("\"")) {
+                                            json = json.substring(1, json.length() - 1).replace("\\\"", "\"");
+                                        }
+                                        JSONObject m = new JSONObject(json);
+                                        int mw = m.optInt("w", CARD_WIDTH);
+                                        int mh = m.optInt("h", h);
+                                        log("re-measured css=" + mw + "x" + mh);
+                                        captureAndSave(mw, mh);
+                                    } catch (Exception ex) {
+                                        log("measure parse failed " + ex);
+                                        captureAndSave(w, h);
+                                    }
+                                });
+                    }, 500);
+                } else {
+                    captureAndSave(w, h);
+                }
             });
         }
 
@@ -369,6 +406,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void resizeCapture(int w, int h) {
+        if (captureView == null) return;
+        captureW = Math.max(200, w);
+        captureH = Math.max(200, h);
+        ViewGroup.LayoutParams lp = captureView.getLayoutParams();
+        lp.width = captureW;
+        lp.height = captureH;
+        captureView.setLayoutParams(lp);
+        captureView.requestLayout();
+        log("resize view " + captureW + "x" + captureH);
+    }
+
     private float viewDensity() {
         try {
             return Math.max(1f, captureView.getResources().getDisplayMetrics().density);
@@ -379,12 +428,12 @@ public class MainActivity extends Activity {
 
     private void captureAndSave(int w, int h) {
         if (captureView == null || captureHost == null) return;
-        float d = viewDensity();
         cssW = Math.max(600, Math.min(w, 2000));
         cssH = Math.max(1, h);
+        float d = pageDpr > 1 ? pageDpr : viewDensity();
         captureW = Math.round(cssW * d);
         captureH = Math.round(cssH * d);
-        log("page css=" + cssW + "x" + cssH + " density=" + d + " view=" + captureW + "x" + captureH);
+        log("final css=" + cssW + "x" + cssH + " dpr=" + d + " view=" + captureW + "x" + captureH);
         ViewGroup.LayoutParams lp = captureView.getLayoutParams();
         lp.width = captureW;
         lp.height = captureH;
@@ -447,7 +496,7 @@ public class MainActivity extends Activity {
         if (captureView == null) return;
         Bitmap bmp = null;
         try {
-            float d = viewDensity();
+            float d = pageDpr > 1 ? pageDpr : viewDensity();
             bmp = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(bmp);
             canvas.drawColor(Color.WHITE);
