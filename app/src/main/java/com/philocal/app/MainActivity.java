@@ -107,15 +107,6 @@ public class MainActivity extends Activity {
 
         webView.loadUrl("https://" + ASSET_HOST + "/index.html");
 
-        android.content.SharedPreferences sp = getSharedPreferences("phi", MODE_PRIVATE);
-        if (!sp.getBoolean("selftest_v4", false)) {
-            sp.edit().putBoolean("selftest_v4", true).apply();
-            webView.postDelayed(() -> {
-                if (webView == null) return;
-                log("self-test start");
-                webView.evaluateJavascript("window.__selfTest ? window.__selfTest() : 'no-selftest'", null);
-            }, 4000);
-        }
     }
 
     private void configure(WebSettings s) {
@@ -223,34 +214,6 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception ignored) { }
-    }
-
-    private void dumpPreview(Bitmap src, String tag) {
-        try {
-            int w = 240;
-            int h = Math.max(1, Math.round(w * (float) src.getHeight() / src.getWidth()));
-            Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
-            ByteArrayOutputStream jb = new ByteArrayOutputStream();
-            small.compress(Bitmap.CompressFormat.JPEG, 72, jb);
-            small.recycle();
-            String b64 = Base64.encodeToString(jb.toByteArray(), Base64.NO_WRAP);
-            StringBuilder sb = new StringBuilder();
-            sb.append("tag=").append(tag).append('\n');
-            sb.append("src=").append(src.getWidth()).append('x').append(src.getHeight()).append('\n');
-            sb.append("size=").append(b64.length()).append('\n');
-            for (int i = 0; i < b64.length(); i += 76) {
-                sb.append(b64, i, Math.min(b64.length(), i + 76)).append('\n');
-            }
-            java.io.File ext = getExternalFilesDir(null);
-            if (ext != null) {
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(ext, "phi-preview.b64.txt"))) {
-                    fos.write(sb.toString().getBytes("UTF-8"));
-                }
-            }
-            log("preview dumped " + w + "x" + h + " b64=" + b64.length());
-        } catch (Throwable t) {
-            log("preview dump failed " + t);
-        }
     }
 
     private void resolve(String callbackId, String json) {
@@ -462,7 +425,6 @@ public class MainActivity extends Activity {
                 fos.flush();
             }
             log("captured " + bmp.getWidth() + "x" + bmp.getHeight() + " png=" + png.length);
-            dumpPreview(bmp, "final");
             String result = writeToGallery(png, captureMode, name);
             log("gallery " + result);
             finishCapture(withPreview(result, name));
@@ -522,9 +484,6 @@ public class MainActivity extends Activity {
             JSONObject o = new JSONObject(json);
             if (o.optBoolean("ok")) {
                 o.put("preview", "https://" + ASSET_HOST + "/card/" + name);
-                o.put("meta", "view=" + viewWidthPx + "x" + viewHeightPx
-                        + " css=" + cardCssW + "x" + cardCssH
-                        + " k=" + lastScale + " zoom=" + zoom + " tiles=" + tileCount);
             }
             return o.toString();
         } catch (Exception e) {

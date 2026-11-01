@@ -28,19 +28,25 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk "out/phi-local-${{ github.event.release.tag_name }}.apk" 2>/dev/null \
+            || cp app/build/outputs/apk/release/*.apk out/phi-local-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: phi-local-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: phi-local-release
+          path: out/*.apk
           if-no-files-found: error
 
       - name: Attach APK to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/*.apk
+          files: out/*.apk
           tag_name: ${{ github.event.release.tag_name }}

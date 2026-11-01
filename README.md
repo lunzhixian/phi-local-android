@@ -30,6 +30,11 @@ B19 页右上角切换 B19 / B30 / B50，底部「保存图片」「分享」会
 
 原插件里的 QQ 相关能力（群聊指令、@、图片发送、排行、货币、猜歌、机器人管理、接口配置等）全部移除。
 
+## 版本
+
+- 正式版 **2.0.0**：移除演示/自检入口，使用仓库内置签名（`keystore/phi-release.p12`，口令见 `app/build.gradle`）构建 `assembleRelease`。
+- 由于签名与早期 debug 版不同，从旧版升级需要先卸载旧应用（Token 需重新填写一次）。
+
 ## 技术实现
 
 - **原生壳**：单 Activity + WebView（Java，无第三方依赖），`app/src/main/java/com/philocal/app/MainActivity.java`
@@ -44,10 +49,10 @@ B19 页右上角切换 B19 / B30 / B50，底部「保存图片」「分享」会
 
 ### GitHub Actions（推荐）
 
-推送到 GitHub 后，`.github/workflows/build.yml` 会在 `ubuntu-latest` 上用 JDK 17 + Gradle 8.7 编译：
+推送到 GitHub 后，`.github/workflows/build.yml` 会在 `ubuntu-latest` 上用 JDK 17 + Gradle 8.7 编译 **release** 版：
 
 ```
-Actions → Build APK → 运行结束在 Artifacts 下载 phi-local-debug
+Actions → Build APK → 运行结束在 Artifacts 下载 phi-local-release
 ```
 
 也可以 `workflow_dispatch` 手动触发；打 release 时会自动把 APK 附到 Release。
@@ -59,7 +64,7 @@ cd app
 ../gradlew assembleDebug   # 需要 Android SDK + JDK 17
 ```
 
-APK 输出：`app/build/outputs/apk/debug/app-debug.apk`。
+APK 输出：`app/build/outputs/apk/release/app-release.apk`。
 
 ## 目录
 

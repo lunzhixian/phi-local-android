@@ -421,8 +421,6 @@
 
   function showPreview(url, meta) {
     if (!url) return;
-    const m = document.getElementById('cardPreviewMeta');
-    if (m) m.textContent = meta || '';
     const box = document.getElementById('cardPreview');
     const img = document.getElementById('cardPreviewImg');
     if (!box || !img) return;
@@ -575,7 +573,6 @@
   });
   $('saveImgBtn')?.addEventListener('click', () => saveCard(false));
   $('shareImgBtn')?.addEventListener('click', () => saveCard(true));
-  $('demoBtn')?.addEventListener('click', () => { demoMode(); switchView('home'); });
   $('goB19Btn').addEventListener('click', () => switchView('b19'));
   $('clearBtn').addEventListener('click', () => {
     store.removeItem(LS_TOKEN);
@@ -623,57 +620,7 @@
       setStatus('未绑定');
       renderAll();
     }
-    if (location.search.includes('demo')) demoMode();
   }
-
-  function demoMode() {
-    const records = {};
-    const pool = DATA.songs.filter((s) => s.diffs.IN);
-    for (let i = 0; i < 90; i++) {
-      const s = pool[(i * 37) % pool.length];
-      if (!s || records[s.id]) continue;
-      const lv = s.diffs.AT ? (i % 3 === 0 ? 'AT' : 'IN') : 'IN';
-      const score = 940000 + ((i * 7919) % 60001);
-      const acc = Math.min(100, 92 + ((i * 131) % 800) / 100);
-      records[s.id] = [];
-      // 按难度索引放置
-      const idx = LEVEL_NAMES.indexOf(lv);
-      records[s.id][idx] = { score, acc: Number(acc.toFixed(3)), fc: i % 11 === 0 };
-    }
-    const save = {
-      records,
-      progress: { money: [12, 3, 1, 0, 0], challengeModeRank: 1203 },
-      user: { selfIntro: '本地演示' },
-      summary: { rankingScore: 13.7421, challengeModeRank: 1203 },
-      nickname: 'Demo Player',
-      updatedAt: new Date().toLocaleString('zh-CN'),
-    };
-    state.save = save;
-    state.computed = compute(save);
-    setStatus('演示模式');
-    renderAll();
-  }
-
-  /** 安装后自检：用示例数据跑一遍原版模板出图 */
-  window.__selfTest = async function () {
-    try {
-      if (state.token) return 'skip'; // 已绑定账号的用户不打扰
-      demoMode();
-      await new Promise((r) => setTimeout(r, 300));
-      state.view = 'b19';
-      renderAll();
-      await saveCard(false);
-      // 自检结束后恢复成“未绑定”界面，不要留下测试账号
-      state.save = null;
-      state.computed = null;
-      state.view = 'home';
-      setStatus('未绑定');
-      renderAll();
-      return 'ok';
-    } catch (e) {
-      return 'err:' + (e && e.message);
-    }
-  };
 
   boot();
 })();

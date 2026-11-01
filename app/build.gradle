@@ -10,13 +10,25 @@ android {
         applicationId "com.philocal.phi"
         minSdk 26
         targetSdk 34
-        versionCode 17
-        versionName "1.6.0"
+        versionCode 20
+        versionName "2.0.0"
+    }
+
+    signingConfigs {
+        release {
+            // 仓库内置的发布签名（PKCS12）。个人自用，口令公开，仅用于保证跨版本可覆盖安装。
+            storeFile rootProject.file('keystore/phi-release.p12')
+            storeType 'PKCS12'
+            storePassword 'philocal2026'
+            keyAlias 'philocal'
+            keyPassword 'philocal2026'
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
