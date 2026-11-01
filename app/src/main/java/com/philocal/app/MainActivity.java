@@ -307,7 +307,17 @@ public class MainActivity extends Activity {
         captureView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         configure(captureView.getSettings());
         captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
-        captureView.setWebViewClient(new AssetClient());
+        captureView.setWebViewClient(new AssetClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                log("page finished: " + url);
+                try {
+                    view.evaluateJavascript("window.__render(" + JSONObject.quote(captureData) + ")", null);
+                } catch (Throwable t) {
+                    log("evaluate failed: " + t);
+                }
+            }
+        });
         captureHost.addView(captureView, new FrameLayout.LayoutParams(captureW, captureH));
 
         // 必须真正参与绘制：作为最上层、大小等于卡片，短暂覆盖在界面上
