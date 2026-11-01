@@ -612,6 +612,11 @@
   /* ---------------- 启动 ---------------- */
 
   function boot() {
+    try {
+      const v = window.NativeBridge && window.NativeBridge.appVersion && window.NativeBridge.appVersion();
+      const el = document.getElementById('appVersion');
+      if (v && el) el.textContent = v;
+    } catch (e) { /* 预览环境忽略 */ }
     if (state.token) {
       $('tokenInput').value = state.token;
       $('tokenInput2').value = state.token;

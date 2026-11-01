@@ -264,7 +264,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String appVersion() {
-            return "1.5.0";
+            return "2.0.1";
         }
     }
 
