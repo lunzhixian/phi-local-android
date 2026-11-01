@@ -11,3 +11,7 @@ app/src/main/assets/www/
 *.apk
 *.keystore
 preview/
+render-out/
+node_modules/
+package.json
+package-lock.json
