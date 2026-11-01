@@ -43,8 +43,9 @@
       setTimeout(function () {
         requestAnimationFrame(function () {
           requestAnimationFrame(function () {
-            var w = Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, 1200);
-            var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+            var bodyRect = document.body.getBoundingClientRect();
+            var w = Math.ceil(Math.max(bodyRect.width, document.body.scrollWidth, 1200));
+            var h = Math.ceil(Math.max(bodyRect.height, document.body.scrollHeight));
             if (window.CaptureBridge) window.CaptureBridge.ready(w, h);
           });
         });
