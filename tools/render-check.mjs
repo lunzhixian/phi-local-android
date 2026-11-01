@@ -86,6 +86,17 @@ async function shoot(url, file) {
   });
   await page.setViewport({ width: box.w, height: box.h, deviceScaleFactor: 1 });
   await new Promise((r) => setTimeout(r, 400));
+  const imgs = await page.evaluate(() => {
+    const list = Array.from(document.images).map((i) => ({
+      name: decodeURIComponent(i.currentSrc || i.src).split('/').pop(),
+      ok: i.complete && i.naturalWidth > 0,
+      w: Math.round(i.getBoundingClientRect().width),
+      h: Math.round(i.getBoundingClientRect().height),
+    }));
+    const fontsDone = document.fonts ? document.fonts.status : 'n/a';
+    return { total: list.length, ok: list.filter((x) => x.ok).length, bad: list.filter((x) => !x.ok).slice(0, 5), sample: list.slice(0, 3), fontsDone };
+  });
+  console.log('[images]', url, JSON.stringify(imgs));
   await page.screenshot({ path: file, type: 'png', fullPage: true });
   await page.close();
   return box;
