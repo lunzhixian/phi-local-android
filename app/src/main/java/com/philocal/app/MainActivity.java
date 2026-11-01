@@ -323,7 +323,7 @@ public class MainActivity extends Activity {
         captureView = new WebView(this);
         captureView.setBackgroundColor(Color.WHITE);
         configure(captureView.getSettings());
-        captureView.getSettings().setInitialScale(percent);
+        captureView.setInitialScale(percent);
         captureView.addJavascriptInterface(new CaptureBridge(), "CaptureBridge");
         captureView.setWebViewClient(new AssetClient() {
             @Override
