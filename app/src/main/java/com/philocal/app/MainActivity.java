@@ -378,47 +378,38 @@ public class MainActivity extends Activity {
         public void readyInfo(int w, int h, String info) {
             runOnUiThread(() -> {
                 log("page info " + info);
-                pageDpr = viewDensity();
-                int pageCssH = h;
+                float d = viewDensity();
                 try {
                     JSONObject o = new JSONObject(info);
-                    pageDpr = (float) o.optDouble("dpr", pageDpr);
-                    pageCssH = o.optInt("bh", h);
-                } catch (Exception e) {
-                    // 用资源密度兜底
-                }
-                if (pageDpr < 1f) pageDpr = viewDensity();
-                log("dpr=" + pageDpr + " cssH=" + pageCssH);
-                // 目标：让页面 CSS 宽度 = 1200，再按 dpr 放大视图
-                int wantW = Math.round(CARD_WIDTH * pageDpr);
-                final int fCssH = pageCssH;
-                if (Math.abs(wantW - captureW) > 2) {
-                    resizeCapture(wantW, Math.round(Math.max(fCssH, 200) * pageDpr));
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                        if (captureView == null) return;
-                        captureView.evaluateJavascript(
-                                "window.__measure ? window.__measure() : null",
-                                value -> {
-                                    if (value == null) { captureAndSave(CARD_WIDTH, fCssH); return; }
-                                    try {
-                                        String json = value;
-                                        if (json.startsWith("\"") && json.endsWith("\"")) {
-                                            json = json.substring(1, json.length() - 1).replace("\\\"", "\"");
-                                        }
-                                        JSONObject m = new JSONObject(json);
-                                        int mw = m.optInt("w", CARD_WIDTH);
-                                        int mh = m.optInt("h", fCssH);
-                                        log("re-measured css=" + mw + "x" + mh);
-                                        captureAndSave(mw, mh);
-                                    } catch (Exception ex) {
-                                        log("measure parse failed " + ex);
-                                        captureAndSave(CARD_WIDTH, fCssH);
-                                    }
-                                });
-                    }, 500);
-                } else {
-                    captureAndSave(CARD_WIDTH, fCssH);
-                }
+                    float pd = (float) o.optDouble("dpr", d);
+                    if (pd > 1f) d = pd;
+                } catch (Exception ignored) { }
+                pageDpr = d;
+
+                // 1) 把视口调成一块：CSS 宽 1200，高 = 一块
+                tileCssH = 700;
+                int viewW = Math.round(CARD_WIDTH * d);
+                int viewH = Math.round(tileCssH * d);
+                resizeCapture(viewW, viewH);
+
+                // 2) 重新量一次真实内容高度
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (captureView == null) return;
+                    captureView.evaluateJavascript("window.scrollTo(0,0); window.__measure ? window.__measure() : null",
+                            value -> {
+                                int mw = CARD_WIDTH, mh = h;
+                                try {
+                                    String json = unquote(value);
+                                    JSONObject m = new JSONObject(json);
+                                    mw = m.optInt("w", CARD_WIDTH);
+                                    mh = m.optInt("h", h);
+                                } catch (Exception ex) {
+                                    log("measure parse failed " + ex + " raw=" + value);
+                                }
+                                log("measure css=" + mw + "x" + mh + " dpr=" + pageDpr);
+                                beginTiles(Math.max(600, Math.min(mw, 2000)), Math.max(1, mh));
+                            });
+                }, 500);
             });
         }
 
@@ -459,126 +450,26 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void captureAndSave(int w, int h) {
+    private String unquote(String value) {
+        if (value == null) return "";
+        String v = value;
+        if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
+            v = v.substring(1, v.length() - 1).replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        return v;
+    }
+
+    private void beginTiles(int w, int h) {
         if (captureView == null || captureHost == null) return;
-        cssW = Math.max(600, Math.min(w, 2000));
-        cssH = Math.max(1, h);
+        cssW = w;
+        cssH = h;
         float d = pageDpr > 1 ? pageDpr : viewDensity();
-        captureW = Math.round(cssW * d);
-        captureH = Math.round(cssH * d);
-        log("final css=" + cssW + "x" + cssH + " dpr=" + d + " view=" + captureW + "x" + captureH);
-        // 先按整卡宽度布局（让 CSS 宽度=1200），高度先取一块，避免创建超大视图
-        // 分块截图：按视口高度滚动，逐块绘制到最终位图
-        tileCssH = Math.max(300, Math.min(cssH, 900));
-        tileIndex = 0;
+        log("begin tiles css=" + cssW + "x" + cssH + " dpr=" + d);
+        if (tileBitmap != null && !tileBitmap.isRecycled()) tileBitmap.recycle();
         tileBitmap = Bitmap.createBitmap(cssW, cssH, Bitmap.Config.ARGB_8888);
         tileCanvas = new Canvas(tileBitmap);
         tileCanvas.drawColor(Color.WHITE);
-        log("tiling css=" + cssW + "x" + cssH + " tileCssH=" + tileCssH + " dpr=" + pageDpr);
-        resizeCapture(captureW, Math.round(tileCssH * (pageDpr > 1 ? pageDpr : viewDensity())));
-        new Handler(Looper.getMainLooper()).postDelayed(() -> captureTile(0), 500);
-    }
-
-    /** 优先用 PixelCopy 抓真实窗口像素（最接近系统截图），失败再退回 view.draw */
-    private void pixelCopyCapture() {
-        if (captureView == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            drawCapture();
-            return;
-        }
-        try {
-            final Bitmap bmp = Bitmap.createBitmap(captureW, captureH, Bitmap.Config.ARGB_8888);
-            int[] loc = new int[2];
-            captureView.getLocationInWindow(loc);
-            android.graphics.Rect rect = new android.graphics.Rect(loc[0], loc[1], loc[0] + captureW, loc[1] + captureH);
-            log("pixelcopy rect=" + rect.toShortString());
-            android.view.PixelCopy.request(getWindow(), rect, bmp, (copyResult) -> {
-                if (copyResult == android.view.PixelCopy.SUCCESS && !isBlank(bmp)) {
-                    try {
-                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                        bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-                        byte[] png = bos.toByteArray();
-                        String name = "phi-card-" + System.currentTimeMillis() + ".png";
-                        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
-                            fos.write(png); fos.flush();
-                        }
-                        log("pixelcopy ok " + captureW + "x" + captureH + " bytes=" + png.length);
-                        dumpPreview(bmp, "pixelcopy");
-                        String result = writeToGallery(png, captureMode, name);
-                        log("gallery: " + result);
-                        finishCapture(withPreview(result, name));
-                    } catch (Throwable t) {
-                        log("pixelcopy save failed " + t);
-                        drawCapture();
-                    } finally {
-                        bmp.recycle();
-                    }
-                } else {
-                    log("pixelcopy fallback result=" + copyResult);
-                    bmp.recycle();
-                    drawCapture();
-                }
-            }, new Handler(Looper.getMainLooper()));
-        } catch (Throwable t) {
-            log("pixelcopy exception " + t);
-            drawCapture();
-        }
-    }
-
-    private void captureTile(final int index) {
-        if (captureView == null || tileBitmap == null) return;
-        final int offset = index * tileCssH;
-        if (offset >= cssH) {
-            finishTiles();
-            return;
-        }
-        captureView.evaluateJavascript("window.scrollTo(0," + offset + ")", null);
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (captureView == null || tileBitmap == null) return;
-            try {
-                float d = pageDpr > 1 ? pageDpr : viewDensity();
-                tileCanvas.save();
-                tileCanvas.scale(1f / d, 1f / d);
-                tileCanvas.translate(0, -offset);
-                captureView.draw(tileCanvas);
-                tileCanvas.restore();
-                log("tile " + index + " offset=" + offset);
-            } catch (Throwable t) {
-                log("tile " + index + " failed " + t);
-            }
-            captureTile(index + 1);
-        }, 260);
-    }
-
-    private void finishTiles() {
-        Bitmap bmp = tileBitmap;
-        tileBitmap = null;
-        tileCanvas = null;
-        if (bmp == null) return;
-        try {
-            if (isBlank(bmp)) {
-                log("tiles blank");
-                bmp.recycle();
-                drawScaledCapture();
-                return;
-            }
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-            byte[] png = bos.toByteArray();
-            String name = "phi-card-" + System.currentTimeMillis() + ".png";
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(cardDir(), name))) {
-                fos.write(png); fos.flush();
-            }
-            log("captured tiles css=" + cssW + "x" + cssH + " png=" + png.length);
-            dumpPreview(bmp, "tiles");
-            String result = writeToGallery(png, captureMode, name);
-            log("gallery: " + result);
-            finishCapture(withPreview(result, name));
-        } catch (Throwable t) {
-            log("finish tiles failed " + t);
-            finishCapture(failJson("截图失败：" + t.getMessage()));
-        } finally {
-            if (!bmp.isRecycled()) bmp.recycle();
-        }
+        captureTile(0);
     }
 
     /** 按 CSS 尺寸输出：view 按设备密度布局，画布缩放 1/density */
