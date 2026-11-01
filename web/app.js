@@ -383,11 +383,12 @@
   async function saveCard(share) {
     if (!state.computed) { toast('请先同步成绩'); return; }
     const mode = share ? 'share' : 'save';
-    if (window.NativeBridge && typeof window.NativeBridge.renderB19 === 'function') {
+    if (window.NativeBridge && typeof window.NativeBridge.renderCard === 'function') {
       toast('正在按原版模板生成…');
       try {
         const data = await buildB19Data(state.computed);
-        const res = await nativePromise('renderB19', JSON.stringify(data), mode);
+        const res = await nativePromise('renderCard', JSON.stringify(data), mode);
+        showPreview(res && res.preview);
         toast(share ? '已打开分享' : '已保存到相册 Pictures/PhiLocal');
         return res;
       } catch (e) {
@@ -397,7 +398,9 @@
     }
     // 回退：Canvas 绘制
     try {
-      const url = window.PhiCard.draw(state.computed, state.n, `BEST ${state.n}`);
+      let images = {};
+      try { images = await window.PhiCard.preload(state.computed.list.slice(0, state.n)); } catch (e) { images = {}; }
+      const url = window.PhiCard.draw(state.computed, state.n, `BEST ${state.n}`, images);
       if (window.NativeBridge && typeof window.NativeBridge.saveImage === 'function') {
         const id = `img_${Date.now()}`;
         window.__imageResolve = window.__imageResolve || {};
@@ -414,6 +417,15 @@
     } catch (e) {
       toast(String(e.message || e));
     }
+  }
+
+  function showPreview(url) {
+    if (!url) return;
+    const box = document.getElementById('cardPreview');
+    const img = document.getElementById('cardPreviewImg');
+    if (!box || !img) return;
+    img.src = url;
+    box.classList.remove('hidden');
   }
 
   /** 调用原生桥并等待回调 */
@@ -551,6 +563,7 @@
   });
 
   $('syncBtn').addEventListener('click', sync);
+  $('cardPreviewClose')?.addEventListener('click', () => $('cardPreview').classList.add('hidden'));
   $('b19Seg')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-n]');
     if (!btn) return;

@@ -75,7 +75,35 @@
    * @param {number} n 展示条数（19 / 30 / 50）
    * @param {string} modeLabel
    */
-  function draw(c, n, modeLabel) {
+  const illUrl = (id) => `https://appassets.local/plugin/ill/${encodeURIComponent(id)}.jpg`;
+
+  /** 预载曲绘（失败忽略），返回 id → Image 映射 */
+  function preload(items) {
+    const jobs = (items || []).map((it) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve([it.id, img]);
+      img.onerror = () => resolve([it.id, null]);
+      img.src = illUrl(it.id);
+    }));
+    return Promise.all(jobs).then((pairs) => {
+      const map = {};
+      for (const [id, img] of pairs) if (img) map[id] = img;
+      return map;
+    });
+  }
+
+  function drawIll(ctx, img, x, y, size) {
+    ctx.save();
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.clip();
+    const ratio = Math.max(size / img.width, size / img.height);
+    const w = img.width * ratio;
+    const h = img.height * ratio;
+    ctx.drawImage(img, x + (size - w) / 2, y + (size - h) / 2, w, h);
+    ctx.restore();
+  }
+
+  function draw(c, n, modeLabel, images) {
     const list = (c.list || []).slice(0, n);
     const listTop = 400;
     const footerH = 130;
@@ -189,10 +217,12 @@
       ctx.font = '800 34px sans-serif';
       ctx.fillText(String(i + 1), PAD + 22, y + ROW_H / 2 + 12);
 
-      const nameX = PAD + 96;
+      const ill = images && images[item.id];
+      const nameX = PAD + (ill ? 118 : 96);
+      if (ill) drawIll(ctx, ill, PAD + 18, y + 10, ROW_H - 20);
       ctx.fillStyle = '#ffffff';
       ctx.font = '600 30px sans-serif';
-      ctx.fillText(ellipsis(ctx, item.song, 470), nameX, y + 44);
+      ctx.fillText(ellipsis(ctx, item.song, ill ? 400 : 470), nameX, y + 44);
 
       // 难度 + 定数 + 评级
       let bx = nameX;
@@ -229,5 +259,5 @@
     return canvas.toDataURL('image/png');
   }
 
-  global.PhiCard = { draw };
+  global.PhiCard = { draw, preload };
 })(window);
