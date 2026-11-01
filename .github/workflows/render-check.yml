@@ -9,6 +9,9 @@ on:
       - 'tools/**'
       - '.github/workflows/render-check.yml'
 
+permissions:
+  contents: write
+
 jobs:
   render:
     runs-on: ubuntu-latest
