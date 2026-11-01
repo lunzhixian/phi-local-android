@@ -54,7 +54,7 @@ public class MainActivity extends Activity {
     private String captureMode;
     private String captureData;
     private int captureW = CARD_WIDTH;
-    private int captureH = 2000;
+    private int captureH = 1200;
     private int captureTries = 0;
     private final StringBuilder diag = new StringBuilder();
 
