@@ -262,6 +262,30 @@ public class MainActivity extends Activity {
         diag.append(System.currentTimeMillis() % 100000).append("ms ").append(msg).append('\n');
     }
 
+    /** 把成图缩成 240px 宽的 JPEG，base64 写进文本文件，方便 adb 侧直接查看 */
+    private void dumpPreview(Bitmap src, String tag) {
+        try {
+            int w = 240;
+            int h = Math.max(1, Math.round(w * (float) src.getHeight() / src.getWidth()));
+            Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
+            ByteArrayOutputStream jb = new ByteArrayOutputStream();
+            small.compress(Bitmap.CompressFormat.JPEG, 72, jb);
+            small.recycle();
+            String b64 = Base64.encodeToString(jb.toByteArray(), Base64.NO_WRAP);
+            String text = "tag=" + tag + "\nsrc=" + src.getWidth() + "x" + src.getHeight()
+                    + "\nsize=" + b64.length() + "\n" + b64 + "\n";
+            java.io.File ext = getExternalFilesDir(null);
+            if (ext != null) {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new java.io.File(ext, "phi-preview.b64.txt"))) {
+                    fos.write(text.getBytes("UTF-8"));
+                }
+            }
+            log("preview dumped " + w + "x" + h + " b64=" + b64.length());
+        } catch (Throwable t) {
+            log("preview dump failed " + t);
+        }
+    }
+
     private void writeDiag() {
         try {
             java.io.File ext = getExternalFilesDir(null);
@@ -470,6 +494,7 @@ public class MainActivity extends Activity {
                             fos.write(png); fos.flush();
                         }
                         log("pixelcopy ok " + captureW + "x" + captureH + " bytes=" + png.length);
+                        dumpPreview(bmp, "pixelcopy");
                         String result = writeToGallery(png, captureMode, name);
                         log("gallery: " + result);
                         finishCapture(withPreview(result, name));
@@ -517,6 +542,7 @@ public class MainActivity extends Activity {
                 fos.write(png); fos.flush();
             }
             log("captured css=" + cssW + "x" + cssH + " png=" + png.length);
+            dumpPreview(bmp, "scaled");
             String result = writeToGallery(png, captureMode, name);
             log("gallery: " + result);
             finishCapture(withPreview(result, name));
